@@ -40,30 +40,30 @@ version <- 0.1
 
 # Main reannotation function
 reannotateCts <- function(x) {
-
-    log_info("Attaching library ", x$lib, "...")
-    lib <- fread(x$lib)
-    lib <- lib %>% transmute(sgRNA, gene = Symbol)
-    
-    log_info("Attaching counts file ", x$cts, "...")
-    cts <- fread(x$cts)
-    cts_sgRNA_col <- names(cts)[x$sgRNA]
-    
-    log_info("Using ", cts_sgRNA_col, " to join guide RNA sequences to new annotations...")
-    guides <- cts[[cts_sgRNA_col]]
-    if(any(grepl("[^ACGTacgt]", guides))) {
-      log_error("Non-nucleotide (ACTG) character found in column ", x$sgRNA, ": \"", cts_sgRNA_col, "\" in file: \"", x$cts, "\". Exiting.")
-      panic()
-    }
-    
-    log_info("Reannotating...")
-    cts <- cts %>% left_join(lib, by = setNames(c("sgRNA"), cts_sgRNA_col))
-    cts <- cts %>% unique()
-    cts <- cts %>% mutate(guide = paste0("ID_", 1:nrow(cts)))
-    
-    log_info("Writing new annotations to ", x$out)
-    fwrite(cts, x$out, sep = "\t")
-    
+  
+  log_info("Attaching library ", x$lib, "...")
+  lib <- fread(x$lib)
+  lib <- lib %>% transmute(sgRNA, gene = Symbol)
+  
+  log_info("Attaching counts file ", x$cts, "...")
+  cts <- fread(x$cts)
+  cts_sgRNA_col <- names(cts)[x$sgRNA]
+  
+  log_info("Using ", cts_sgRNA_col, " to join guide RNA sequences to new annotations...")
+  guides <- cts[[cts_sgRNA_col]]
+  if(any(grepl("[^ACGTacgt]", guides))) {
+    log_error("Non-nucleotide (ACTG) character found in column ", x$sgRNA, ": \"", cts_sgRNA_col, "\" in file: \"", x$cts, "\". Exiting.")
+    panic()
+  }
+  
+  log_info("Reannotating...")
+  cts <- cts %>% left_join(lib, by = setNames(c("sgRNA"), cts_sgRNA_col))
+  cts <- cts %>% unique()
+  cts <- cts %>% mutate(guide = paste0("ID_", 1:nrow(cts)))
+  
+  log_info("Writing new annotations to ", x$out)
+  fwrite(cts, x$out, sep = "\t")
+  
 }
 
 # Helper function to vectorise inputs into a rectangular table
@@ -96,10 +96,6 @@ panic <- function() stop("There were errors while running the script. Check the 
 
 #### MAIN ####
 
-logfile <- paste0("logfile_crispieR-cts_", format(Sys.time(), "%Y-%m-%dT%H-%M-%S%Z"), ".log")
-log_appender(appender_tee(logfile))
-log_info("Welcome to crispieR-cts, version ", version, ".")
-
 if (interactive()) {
   opt <- list()
   opt$cts <- "~/bio/Projects/improving-guide-design/benslimane-paper/author/cts/BenslimaneHarrington2020.GSE150232_Nalm6_sgRNA_read_counts.txt"
@@ -121,7 +117,14 @@ if (!interactive()) {
                 help = "Column number in the counts file that specifies the sgRNAs", metavar = "character")
   )
   
+  opt_parser = OptionParser(option_list = option_list)
+  opt = parse_args(opt_parser)
+  
 }
+
+logfile <- paste0(dirname(opt$out), "/logfile_crispieR-cts_", format(Sys.time(), "%Y-%m-%dT%H-%M-%S%Z"), ".log")
+log_appender(appender_tee(logfile))
+log_info("Welcome to crispieR-cts, version ", version, ".")
 
 # Find out how many times we need to run the re-annotation
 n_analyses <- max(sapply(opt, FUN = length))

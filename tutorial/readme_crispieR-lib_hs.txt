@@ -1,0 +1,15 @@
+crispieR-lib.R \
+  -i crispieR-lib/tesths/author/supplementary_table_s2__updated_220804.xlsx,crispieR-lib/tesths/author/supplementary_table_s2__updated_220804.xlsx,crispieR-lib/tesths/author/supplementary_table_s2__updated_220804.xlsx,crispieR-lib/tesths/author/supplementary_table_s2__updated_220804.xlsx,crispieR-lib/tesths/author/supplementary_table_s2__updated_220804.xlsx,crispieR-lib/tesths/author/supplementary_table_s2__updated_220804.xlsx,crispieR-lib/tesths/author/supplementary_table_s2__updated_220804.xlsx,crispieR-lib/tesths/author/supplementary_table_s2__updated_220804.xlsx \
+	-k xlsx \
+	-e 2,2,3,3,4,4,5,5 \
+	-g 5,12,2,6,5,10,2,6 \
+	-n 1 \
+	-a Human \
+	-t "^(.+?)\\(\\d+\\)$","^(.+?)\\(\\d+\\)$","^.+?_(.+?)\\(\\d+\\)$","^.+?_(.+?)\\(\\d+\\)$","^(.+)$","^(.+)\\(\\d+\\)$","^(.+)\\(\\d+\\)$" \
+	-c unknown,mCherry,tdtomato,EGFP \
+	-d Non-targeting,Non-targeting,Non-targeting,Non-targeting \
+	-p tesths \
+	-v crispieR-lib/data/hg38.2020-09-22.2bit,crispieR-lib/data/hg19.2020-01-15.2bit \
+	-w crispieR-lib/data/hg38.refseq.exons.tsv.gz,crispieR-lib/data/hg19.refseq.exons.tsv.gz \
+	-y crispieR-lib/data/symbol_ids_table.csv.gz \
+	-o crispieR-lib
