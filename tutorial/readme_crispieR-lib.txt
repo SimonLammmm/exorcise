@@ -1,0 +1,11 @@
+crispieR-lib.R \
+  -i crispieR-lib/testlib/author/fake-lib.tsv \
+	-k tsv \
+	-g 1 \
+	-n 2 \
+	-a Human \
+	-p testlib \
+	-v crispieR-lib/data/hg38.2020-09-22.2bit \
+	-w crispieR-lib/data/hg38.refseq.exons.tsv.gz \
+	-y crispieR-lib/data/symbol_ids_table.csv.gz \
+	-o crispieR-lib

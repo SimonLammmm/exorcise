@@ -22,7 +22,8 @@
 #### VERSION HISTORY ####
 # version       datestamp             description
 # 0.1           2022-12-09T12-28-16   initial release
-ver <- 0.1
+# 0.11          2022-12-16T11-47-33   bugfixes and introduced new bugs
+ver <- 0.11
 
 #### INIT ####
 suppressPackageStartupMessages({
@@ -126,7 +127,7 @@ reannotateLib <- function(opt) {
   
   master <- crispieRmaster(premaster, blats, opt)
   crispieRnegctrls(premaster, blats, opt)
-  inferredTargets <- crispieRinferTargets(master, blats, opt)
+  if(!is.null(opt$symbol_col)) { inferredTargets <- crispieRinferTargets(master, blats, opt) }
   
 }
 
@@ -171,11 +172,17 @@ importAuthorsLib <- function(opt) {
       }
     }
     
-    names(data)[1:3] <- c("ID", "sgRNA", "Original_symbol") # be sure that column names are correct
+    if(!is.null(opt$symbol_col)) {
+      names(data)[1:3] <- c("ID", "sgRNA", "Original_symbol") # be sure that column names are correct
+    } else {
+      names(data)[1:2] <- c("ID", "sgRNA") # be sure that column names are correct
+    }
     
-    data <- as_tibble(lapply(data, as.character)) %>%
-      filter(!is.na(Original_symbol)) %>%
-      filter(Original_symbol != "") # remove NA author's symbols
+    if(!is.null(opt$symbol_col)) {
+      data <- as_tibble(lapply(data, as.character)) %>%
+        filter(!is.na(Original_symbol)) %>%
+        filter(Original_symbol != "") # remove NA author's symbols
+    }
     
     if(nrow(data) > 0) { data } else { NULL }
   }
@@ -334,8 +341,8 @@ runGrtem <- function(blats) {
       exons <- import_exome(blats$file_exons[b], exome_cols)                    # Make a gRanges object from the exome file (with Symbol column to provide re-annotations)
       hits <- import_hits(blats$file_genomic_ranges[b], hits_cols)              # Make a gRanges object from the hits file (with ID column indicating guides in the library to be reannotated)
       
-      exon_hits <- findOverlaps(hits, exons)                                    # Make a gRanges Hits object indicating the pairs of gRanges that overlap between query (hits) and subject (exome)
-      exon_hitsRanges <- findOverlapPairs(hits, exons)                          # Make a gRanges Pairs object indicating the genomic ranges of pairs of gRanges that overlap between the first (hits) and second (exome)
+      exon_hits <- suppressWarnings(findOverlaps(hits, exons))                  # Make a gRanges Hits object indicating the pairs of gRanges that overlap between query (hits) and subject (exome)
+      exon_hitsRanges <- suppressWarnings(findOverlapPairs(hits, exons))        # Make a gRanges Pairs object indicating the genomic ranges of pairs of gRanges that overlap between the first (hits) and second (exome)
       sgrna_hits <- GRanges(exon_hitsRanges@first,                              # Make a gRanges object which contains the genomic ranges of the hits and the Symbols from the exome
                             Symbol = exons$Symbol[exon_hits@to],
                             ID = as.character(hits$ID[exon_hits@from]))
@@ -343,7 +350,7 @@ runGrtem <- function(blats) {
       mapping$assembly <- blats$file_genome[b]
       mapping$exome <- blats$file_exons[b]
       
-      distances <- distanceToNearest(hits, exons, select = "arbitrary")         # Make a gRanges Hits object showing the distances from each hit (queryHits) to the nearest exon in the exome (subjectHits)
+      distances <- suppressWarnings(distanceToNearest(hits, exons, select = "arbitrary")) # Make a gRanges Hits object showing the distances from each hit (queryHits) to the nearest exon in the exome (subjectHits)
       sgrna_distances <- GRanges(hits[distances@from],                          # Make a gRanges object annotated with the gene of the nearest exon and the distance to that exon
                                  nearestGene = exons$Symbol[distances@to],
                                  distance = distances@elementMetadata$distance,
@@ -477,6 +484,7 @@ crispieRnegctrls <- function(premaster, blats, opt) {
     log_info("Wrote negative control mapping report to ", outfile_negctrl_mappings_tsv)
     
   }
+  
   return()
 }
 
@@ -485,6 +493,10 @@ crispieRmaster <- function(premaster, blats, opt) {
   
   for (i in 1:length(premaster)) {
     premaster[[i]][which(is.na(premaster[[i]]) | premaster[[i]] == "")] <- "X"
+  }
+  
+  if(is.null(opt$control_string)) {
+    premaster$Symbol[which(premaster$Symbol == "X")] <- "Non-targeting"
   }
   
   # Fix controls
@@ -761,11 +773,11 @@ if (!interactive()) {
     make_option(opt_str = c("-p", "--project_name"), type = "character", default = NULL,
                 help = "Name to append to output files.", metavar = "character"),
     make_option(opt_str = c("-v", "--file_genome"), type = "character", default = NULL,
-                help = "Name to append to output files.", metavar = "character"),
+                help = "Path to 2bit assembly file for BLAT. See example.", metavar = "character"),
     make_option(opt_str = c("-w", "--file_exons"), type = "character", default = NULL,
-                help = "Name to append to output files.", metavar = "character"),
+                help = "Path to exons file. See example.", metavar = "character"),
     make_option(opt_str = c("-y", "--file_feature_priorities"), type = "character", default = NULL,
-                help = "Name to append to output files.", metavar = "character"),
+                help = "Path to feature priorities file. See example.", metavar = "character"),
     make_option(opt_str = c("-o", "--outdir"), type = "character", default = NULL,
                 help = "Path to place output files.", metavar = "character")
   )
@@ -774,7 +786,7 @@ if (!interactive()) {
   opt = parse_args(opt_parser)
   
   if(!is.null(opt$project_name)) {
-    logfile <- paste0(opt$project_name, "/logfile_crispieR-lib_", format(Sys.time(), "%Y-%m-%dT%H-%M-%S%Z"), ".log")
+    logfile <- paste0(opt$outdir, "/", opt$project_name, "/logfile_crispieR-lib_", format(Sys.time(), "%Y-%m-%dT%H-%M-%S%Z"), ".log")
     dir.create(dirname(logfile), recursive = T, showWarnings = F)
     log_appender(appender_tee(logfile))
   }
@@ -798,5 +810,5 @@ log_info("Command: crispieR-lib.R ", command)
 # Call main loop
 reannotateLib(opt)
 end_time <- proc.time()
-log_info("Completed in ", (end_time - start_time)[[3]], " seconds.")
+log_info("crispieR-lib process completed in ", (end_time - start_time)[[3]], " seconds.")
 

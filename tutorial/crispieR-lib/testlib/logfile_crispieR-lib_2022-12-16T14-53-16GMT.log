@@ -1,0 +1,19 @@
+INFO [2022-12-16 14:53:16] Welcome to crispieR-lib, version 0.11.
+INFO [2022-12-16 14:53:16] cwd: /Users/simonlam/Library/CloudStorage/OneDrive-UniversityofCambridge/Projects/crispieR/src/crispieR/tutorial
+INFO [2022-12-16 14:53:16] Command: crispieR-lib.R --infiles crispieR-lib/testlib/author/fake-lib.tsv --mode KO --kind tsv --grna_col 1 --symbol_col list(2) --header TRUE --species Human --control_retain FALSE --project_name testlib --file_genome crispieR-lib/data/hg38.2020-09-22.2bit --file_exons crispieR-lib/data/hg38.refseq.exons.tsv.gz --file_feature_priorities crispieR-lib/data/symbol_ids_table.csv.gz --outdir crispieR-lib --help FALSE --skip 0
+INFO [2022-12-16 14:53:16] Importing file 1 of 1, crispieR-lib/testlib/author/fake-lib.tsv
+INFO [2022-12-16 14:53:16] Adding sgRNA ID column
+INFO [2022-12-16 14:53:16] Creating sgRNA FASTA
+INFO [2022-12-16 14:53:16] Wrote sgRNA FASTA to crispieR-lib/testlib/1-testlib_sgRNAs.fa
+INFO [2022-12-16 14:53:16] Sending to BLAT: blat crispieR-lib/data/hg38.2020-09-22.2bit crispieR-lib/testlib/1-testlib_sgRNAs.fa crispieR-lib/testlib/2-testlib_hg38.2020-09-22.2bit_BLAT.psl -stepSize=5 -tileSize=11 -fine -repMatch=2000000 -minScore=20 -minIdentity=100
+INFO [2022-12-16 15:07:40] Obtaining genomic hits... crispieR-lib/testlib/2-testlib_hg38.2020-09-22.2bit_BLAT.psl...
+INFO [2022-12-16 15:07:40] Wrote genomic hits file to crispieR-lib/testlib/3-testlib_hg38.2020-09-22.2bit_gR.tsv
+INFO [2022-12-16 15:07:40] Obtaining exonic hits... crispieR-lib/data/hg38.refseq.exons.tsv.gz...
+INFO [2022-12-16 15:07:52] Wrote exonic hits to crispieR-lib/testlib/4a-testlib_hg38.refseq.exons.tsv.gz_exon-hits.tsv
+INFO [2022-12-16 15:07:52] Wrote exonic distances to crispieR-lib/testlib/4b-testlib_hg38.refseq.exons.tsv.gz_exon-dist.tsv
+INFO [2022-12-16 15:08:02] Wrote master library to crispieR-lib/testlib/6a-testlib_master.tsv
+INFO [2022-12-16 15:08:02] Inferring intended targets per original symbol...
+INFO [2022-12-16 15:08:02] Inferring intended targets... 
+INFO [2022-12-16 15:08:04] Inferring intended targets... 97 out of 97 done.
+INFO [2022-12-16 15:08:04] Wrote simplified library to crispieR-lib/testlib/6b-testlib_inferred.tsv
+INFO [2022-12-16 15:08:04] crispieR-lib process completed in 888.244 seconds.

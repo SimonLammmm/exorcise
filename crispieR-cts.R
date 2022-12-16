@@ -28,31 +28,39 @@ library(readxl)
 library(dplyr)
 library(optparse)
 library(logger)
+library(foreach)
 
 #### VERSION HISTORY ####
 
 # Version   Timestamp             Description
 # 0.1       2022-12-07T16-48-10   Initial release
+# 0.2       2022-12-16T11-48-01   Added crispieR-lib wrapper
 
-version <- 0.1
+version <- 0.2
 
 ##### FUNCTIONS ####
 
 # Main reannotation function
-reannotateCts <- function(x) {
+reannotateCts <- function(opt2) {
   
-  log_info("Attaching library ", x$lib, "...")
-  lib <- fread(x$lib)
+  if(suppressWarnings(is.null(opt2$lib))) {
+    log_info("No library supplied. Sending to crispieR-lib using sgRNAs as an ad-hoc library...")
+    crispieRlibWrapper(x)
+    opt2$lib <- paste0(dirname(opt2$out), "/crispieRLib/6a-crispieRLib_master.tsv")
+  }
+  
+  log_info("Attaching library ", opt2$lib, "...")
+  lib <- fread(opt2$lib)
   lib <- lib %>% transmute(sgRNA, gene = Symbol)
   
-  log_info("Attaching counts file ", x$cts, "...")
-  cts <- fread(x$cts)
-  cts_sgRNA_col <- names(cts)[x$sgRNA]
+  log_info("Attaching counts file ", opt2$cts, "...")
+  cts <- fread(opt2$cts)
+  cts_sgRNA_col <- names(cts)[opt2$sgRNA]
   
   log_info("Using ", cts_sgRNA_col, " to join guide RNA sequences to new annotations...")
   guides <- cts[[cts_sgRNA_col]]
   if(any(grepl("[^ACGTacgt]", guides))) {
-    log_error("Non-nucleotide (ACTG) character found in column ", x$sgRNA, ": \"", cts_sgRNA_col, "\" in file: \"", x$cts, "\". Exiting.")
+    log_error("Non-nucleotide (ACTG) character found in column ", opt2$sgRNA, ": \"", cts_sgRNA_col, "\" in file: \"", opt2$cts, "\". Exiting.")
     panic()
   }
   
@@ -61,9 +69,47 @@ reannotateCts <- function(x) {
   cts <- cts %>% unique()
   cts <- cts %>% mutate(guide = paste0("ID_", 1:nrow(cts)))
   
-  log_info("Writing new annotations to ", x$out)
-  fwrite(cts, x$out, sep = "\t")
+  log_info("Writing new annotations to ", opt2$out)
+  fwrite(cts, opt2$out, sep = "\t")
   
+}
+
+# TODO: function that calls crispieR-lib.R if no library is supplied
+crispieRlibWrapper <- function(x) {
+  
+  # Obtain sgRNAs
+  sg <- foreach(i = 1:length(opt2$cts)) %do% {
+    fread(opt2$cts[i]) %>% select(all_of(opt2$sgRNA[i]))
+  } %>% unlist() %>% unique() %>% tibble()
+  
+  # Prepare crispieR-lib function call
+  crispieRLibopt <- list()
+  crispieRLibopt$infiles <- paste0(dirname(opt2$out), "/crispieRLib/0-crispieRLib_sgRNAs.tsv")
+  crispieRLibopt$kind <- "txt"
+  crispieRLibopt$grna_col <- "1"
+  crispieRLibopt$project_name <- "crispieRLib"
+  crispieRLibopt$outdir <- dirname(opt2$out)
+  suppressWarnings({
+    if(!is.null(opt2$mode                   )) crispieRLibopt$mode                    <- opt2$mode                    else crispieRLibopt$mode                    <- "KO"
+    if(!is.null(opt2$PAM                    )) crispieRLibopt$PAM                     <- opt2$PAM                     else crispieRLibopt$PAM                     <- "NGG"
+    if(!is.null(opt2$species                )) crispieRLibopt$species                 <- opt2$species                 else crispieRLibopt$species                 <- "Human"
+    if(!is.null(opt2$file_genome            )) crispieRLibopt$file_genome             <- opt2$file_genome             else crispieRLibopt$file_genome             <- "data/hg38.2020-09-22.2bit"
+    if(!is.null(opt2$file_exons             )) crispieRLibopt$file_exons              <- opt2$file_exons              else crispieRLibopt$file_exons              <- "data/hg38.refseq.exons.tsv"
+    if(!is.null(opt2$file_feature_priorities)) crispieRLibopt$file_feature_priorities <- opt2$file_feature_priorities else crispieRLibopt$file_feature_priorities <- "data/symbol_ids_table.csv"
+  })
+  
+  dir.create(dirname(crispieRLibopt$infiles), recursive = T, showWarnings = F)
+  fwrite(sg, crispieRLibopt$infiles, sep = "\t")
+  
+  # Call crispieR-lib
+  command <- foreach(i = 1:length(crispieRLibopt)) %do% {
+    paste0(" --", names(crispieRLibopt)[i], " ", crispieRLibopt[i])
+  } %>% unlist()
+  
+  command <- paste("crispieR-lib.R", paste0(command, collapse = ""))
+  system(command)
+  
+  # Return to main loop (reannotateCts)
 }
 
 # Helper function to vectorise inputs into a rectangular table
@@ -98,10 +144,10 @@ panic <- function() stop("There were errors while running the script. Check the 
 
 if (interactive()) {
   opt <- list()
-  opt$cts <- "~/bio/Projects/improving-guide-design/benslimane-paper/author/cts/BenslimaneHarrington2020.GSE150232_Nalm6_sgRNA_read_counts.txt"
-  opt$lib <- "~/bio/Projects/DDRcs/lib/EKO/EKO_master.tsv"
+  opt$cts <- "cts/BenslimaneHarrington2020_NALM6/author/cts/BenslimaneHarrington2020.GSE150232_Nalm6_sgRNA_read_counts.txt"
+  opt$lib <- NULL
   opt$out <- "~/bio/Sandbox/out.tsv"
-  opt$sgRNA <- c("1", "2", "3")
+  opt$sgRNA <- "1"
 }
 
 if (!interactive()) {
@@ -110,11 +156,23 @@ if (!interactive()) {
     make_option(opt_str = c("-c", "--cts"), type = "character", default = NULL,
                 help = "Path to original counts file(s) containing sgRNA sequences and authors' gene symbols.", metavar = "character"),
     make_option(opt_str = c("-l", "--lib"), type = "character", default = NULL,
-                help = "Path to crispieR library file(s) that you would like to use for the reannotation.", metavar = "character"),
+                help = "Optional. Path to crispieR library file(s) that you would like to use for the reannotation.", metavar = "character"),
     make_option(opt_str = c("-o", "--out"), type = "character", default = NULL,
                 help = "Path to save the new counts file(s) after re-annotation", metavar = "character"),
     make_option(opt_str = c("-g", "--sgRNA"), type = "character", default = NULL,
-                help = "Column number in the counts file that specifies the sgRNAs", metavar = "character")
+                help = "Column number in the counts file that specifies the sgRNAs", metavar = "character"),
+    make_option(opt_str = c("-q", "--mode"), type = "character", default = NULL,
+                help = "Argument passed to crispieR-lib when --lib is not specified. CRISPR screen type: KO (knockout), a (activation), i (inhibition)", metavar = "character"),
+    make_option(opt_str = c("-a", "--species"), type = "character", default = NULL,
+                help = "Argument passed to crispieR-lib when --lib is not specified. Was the study done on Human or Mouse?", metavar = "character"),
+    make_option(opt_str = c("-z", "--pam"), type = "character", default = NULL,
+                help = "Argument paseed to crispieR-lib when --lib is not specified. Protoadjacent motif to append to 3' ends of sgRNA sequences.", metavar = "character"),
+    make_option(opt_str = c("-v", "--file_genome"), type = "character", default = NULL,
+                help = "Argument paseed to crispieR-lib when --lib is not specified. Path to 2bit assembly file for BLAT. See example.", metavar = "character"),
+    make_option(opt_str = c("-w", "--file_exons"), type = "character", default = NULL,
+                help = "Argument paseed to crispieR-lib when --lib is not specified. Path to exons file. See example.", metavar = "character"),
+    make_option(opt_str = c("-y", "--file_feature_priorities"), type = "character", default = NULL,
+                help = "Argument paseed to crispieR-lib when --lib is not specified. Path to feature priorities file. See example.", metavar = "character")
   )
   
   opt_parser = OptionParser(option_list = option_list)
@@ -123,7 +181,9 @@ if (!interactive()) {
 }
 
 logfile <- paste0(dirname(opt$out), "/logfile_crispieR-cts_", format(Sys.time(), "%Y-%m-%dT%H-%M-%S%Z"), ".log")
+dir.create(dirname(logfile), recursive = T, showWarnings = F)
 log_appender(appender_tee(logfile))
+start_time <- proc.time()
 log_info("Welcome to crispieR-cts, version ", version, ".")
 
 # Find out how many times we need to run the re-annotation
@@ -148,8 +208,9 @@ if(any(is.na(sgRNAcols))) {
   opt2$sgRNA <- sgRNAcols
 }
 
-# Reannotate
 opt2 <- as_tibble(opt2)
+
+# Reannotate
 for (i in 1:n_analyses) {
   commandArgs <- paste(paste0("--", names(opt2[i, ])), opt2[i, ], collapse = " ")
   log_info("Running crispieR-cts, ", i, " of ", n_analyses, "...")
@@ -158,3 +219,5 @@ for (i in 1:n_analyses) {
   reannotateCts(opt2[i, ])
 }
 
+end_time <- proc.time()
+log_info("crispieR-cts process completed in ", (end_time - start_time)[[3]], " seconds.")
