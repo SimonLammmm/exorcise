@@ -35,17 +35,24 @@ library(foreach)
 # Version   Timestamp             Description
 # 0.1       2022-12-07T16-48-10   Initial release
 # 0.2       2022-12-16T11-48-01   Added crispieR-lib wrapper
+# 0.21      2023-02-20T17-00-09   Fixed bugs
+# 0.22      2023-02-27T12-32-43   Added globbed filename functionality
+# 0.23      2023-03-13T14:36:48   Fixed to retain the "guide" column if already exists in input file
+# 0.24      2023-03-13T14:38:33   Fixed to retain the metadata columns other than numerics
 
-version <- 0.2
+version <- 0.24
 
 ##### FUNCTIONS ####
+
+# fread with hanging glob
+fread <- function(x, ...) data.table::fread(file = Sys.glob(paste0(x, "*"))[1], ...)
 
 # Main reannotation function
 reannotateCts <- function(opt2) {
   
   if(suppressWarnings(is.null(opt2$lib))) {
     log_info("No library supplied. Sending to crispieR-lib using sgRNAs as an ad-hoc library...")
-    crispieRlibWrapper(x)
+    crispieRlibWrapper(opt2)
     opt2$lib <- paste0(dirname(opt2$out), "/crispieRLib/6a-crispieRLib_master.tsv")
   }
   
@@ -65,22 +72,33 @@ reannotateCts <- function(opt2) {
   }
   
   log_info("Reannotating...")
-  cts <- cts %>% left_join(lib, by = setNames(c("sgRNA"), cts_sgRNA_col))
+  cts <- cts %>% left_join(lib, by = setNames(c("sgRNA"), cts_sgRNA_col), suffix = c(".orig", ""))
   cts <- cts %>% unique()
-  cts <- cts %>% mutate(guide = paste0("ID_", 1:nrow(cts)))
+  
+  if("guide" %in% names(cts)) {
+    cts$guide.orig <- cts$guide
+  }
+  
+  cts <- cts %>% transmute(cts, guide = paste0("ID_", 1:nrow(cts)), gene)
+  #cts <- cts %>% select(guide, gene, all_of(which(sapply(cts, FUN = function(x) class(x) == "numeric" | class(x) == "integer"))))
   
   log_info("Writing new annotations to ", opt2$out)
   fwrite(cts, opt2$out, sep = "\t")
   
 }
 
-# TODO: function that calls crispieR-lib.R if no library is supplied
-crispieRlibWrapper <- function(x) {
+# Call crispieR-lib.R if no library is supplied
+crispieRlibWrapper <- function(opt2) {
   
   # Obtain sgRNAs
-  sg <- foreach(i = 1:length(opt2$cts)) %do% {
-    fread(opt2$cts[i]) %>% select(all_of(opt2$sgRNA[i]))
-  } %>% unlist() %>% unique() %>% tibble()
+  sg <- foreach(i = 1:length(opt2$cts), .combine = "rbind", .final = function(x) unique(x)) %do% {
+    fread(opt2$cts[i]) %>% select(all_of(c(opt2$sgRNA[i], opt2$symbol_col[i])))
+  }
+  
+  if(any(grepl("[^ACGTacgt]", unlist(sg[,1])))) {
+    log_error("Non-nucleotide (ACTG) character found in input. Exiting.")
+    panic()
+  }
   
   # Prepare crispieR-lib function call
   crispieRLibopt <- list()
@@ -90,6 +108,7 @@ crispieRlibWrapper <- function(x) {
   crispieRLibopt$project_name <- "crispieRLib"
   crispieRLibopt$outdir <- dirname(opt2$out)
   suppressWarnings({
+    if(!is.null(opt2$symbol_col             )) crispieRLibopt$symbol_col              <- "2"                          else crispieRLibopt$symbol_col              <- NULL
     if(!is.null(opt2$mode                   )) crispieRLibopt$mode                    <- opt2$mode                    else crispieRLibopt$mode                    <- "KO"
     if(!is.null(opt2$PAM                    )) crispieRLibopt$PAM                     <- opt2$PAM                     else crispieRLibopt$PAM                     <- "NGG"
     if(!is.null(opt2$species                )) crispieRLibopt$species                 <- opt2$species                 else crispieRLibopt$species                 <- "Human"
@@ -161,18 +180,20 @@ if (!interactive()) {
                 help = "Path to save the new counts file(s) after re-annotation", metavar = "character"),
     make_option(opt_str = c("-g", "--sgRNA"), type = "character", default = NULL,
                 help = "Column number in the counts file that specifies the sgRNAs", metavar = "character"),
+    make_option(opt_str = c("-n", "--symbol_col"), type = "character", default = NULL,
+                help = "Argument passed to crispieR-lib when --lib is not specified. Column number(s) containing authors' gene symbols", metavar = "character"),
     make_option(opt_str = c("-q", "--mode"), type = "character", default = NULL,
                 help = "Argument passed to crispieR-lib when --lib is not specified. CRISPR screen type: KO (knockout), a (activation), i (inhibition)", metavar = "character"),
     make_option(opt_str = c("-a", "--species"), type = "character", default = NULL,
                 help = "Argument passed to crispieR-lib when --lib is not specified. Was the study done on Human or Mouse?", metavar = "character"),
     make_option(opt_str = c("-z", "--pam"), type = "character", default = NULL,
-                help = "Argument paseed to crispieR-lib when --lib is not specified. Protoadjacent motif to append to 3' ends of sgRNA sequences.", metavar = "character"),
+                help = "Argument passed to crispieR-lib when --lib is not specified. Protoadjacent motif to append to 3' ends of sgRNA sequences.", metavar = "character"),
     make_option(opt_str = c("-v", "--file_genome"), type = "character", default = NULL,
-                help = "Argument paseed to crispieR-lib when --lib is not specified. Path to 2bit assembly file for BLAT. See example.", metavar = "character"),
+                help = "Argument passed to crispieR-lib when --lib is not specified. Path to 2bit assembly file for BLAT. See example.", metavar = "character"),
     make_option(opt_str = c("-w", "--file_exons"), type = "character", default = NULL,
-                help = "Argument paseed to crispieR-lib when --lib is not specified. Path to exons file. See example.", metavar = "character"),
+                help = "Argument passed to crispieR-lib when --lib is not specified. Path to exons file. See example.", metavar = "character"),
     make_option(opt_str = c("-y", "--file_feature_priorities"), type = "character", default = NULL,
-                help = "Argument paseed to crispieR-lib when --lib is not specified. Path to feature priorities file. See example.", metavar = "character")
+                help = "Argument passed to crispieR-lib when --lib is not specified. Path to feature priorities file. See example.", metavar = "character")
   )
   
   opt_parser = OptionParser(option_list = option_list)
@@ -196,7 +217,7 @@ names(opt2) <- names(opt)
 # Handle file not found errors
 files <- unique(opt2$cts, opt2$lib)
 for (file in files) {
-  checkIfFileExists(file)
+  checkIfFileExists(Sys.glob(paste0(file, "*"))[1])
 }
 
 # Change input to --sgRNA to integer, error if fails
@@ -206,6 +227,16 @@ if(any(is.na(sgRNAcols))) {
   panic()
 } else {
   opt2$sgRNA <- sgRNAcols
+}
+
+if(!is.null(opt2$symbol_col)) {
+  symbolcols <- as.integer(opt2$symbol_col)
+  if(any(is.na(symbolcols))) {
+    log_error("Non-numeric input found in --symbol_col. Quitting.")
+    panic()
+  } else {
+    opt2$symbol_col <- symbolcols
+  }
 }
 
 opt2 <- as_tibble(opt2)

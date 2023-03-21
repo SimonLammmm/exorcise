@@ -23,7 +23,13 @@
 # version       datestamp             description
 # 0.1           2022-12-09T12-28-16   initial release
 # 0.11          2022-12-16T11-47-33   bugfixes and introduced new bugs
-ver <- 0.11
+# 0.12          2023-02-01T11:52:40   enabled globbed reading from files (useful for reading from gzip)
+# 0.13          2023-02-03T15:30:10   fixed erroneous candidate loss in the target inferring algorithm where candidate genes containing "X" were discarded
+# 0.2           2023-02-20T17:00:30   fixed various bugs
+# 0.21          2023-03-02T11:38:40   fixed issue with infile type inference
+# 0.3           2023-03-10T13:54:14   refined to account for spCas9 cut site
+
+ver <- 0.3
 
 #### INIT ####
 suppressPackageStartupMessages({
@@ -47,7 +53,8 @@ suppressPackageStartupMessages({
 mapper_read_infile <- function(infile, kind = NULL, skip = 0, header, sheet, nrow = Inf) {
   if(is.null(kind)) {
     if(grepl("\\.xlsx*$", infile)) kind <- "xls"
-    else if(grepl("\\.[tc]sv$", infile)) kind <- "sv"
+    else if(grepl("\\.tsv$", infile)) kind <- "tsv"
+    else if(grepl("\\.csv$", infile)) kind <- "csv"
     else kind <- "txt"
   }
   if(grepl("xls", kind)) {
@@ -85,8 +92,10 @@ rangesplit <- function(x) {
 }
 
 # Return true if file doesn't exist or has zero size
-file.not.exist.or.zero <- function(x) !file.exists(x) | file.exists(x) & file.size(x) == 0
+file.not.exist.or.zero <- function(x) !file.exists(Sys.glob(paste0(x, "*"))[1]) | file.exists(Sys.glob(paste0(x, "*"))[1]) & file.size(Sys.glob(paste0(x, "*"))[1]) == 0
 
+# fread with hanging glob
+fread <- function(x, ...) data.table::fread(file = Sys.glob(paste0(x, "*"))[1], ...)
 
 #### MAIN FUNCTION ####
 
@@ -114,7 +123,7 @@ reannotateLib <- function(opt) {
   all_mappings <- foreach(b = 1:length(blats$file_genomic_ranges), .combine = "bind_rows") %do% { # generate mapping
     genome_hits <- fread(blats$file_genomic_ranges[b], colClasses = "character")
     exome_hits <- fread(blats$file_genomic_ranges_matched[b], colClasses = "character")
-    left_join(exome_hits, genome_hits, by = c("seqnames", "start", "end", "ID", "strand"))
+    left_join(exome_hits, genome_hits, by = c("seqnames", "start", "end", "ID", "strand", "assembly"))
   } %>% filter(!is.na(Symbol)) %>% unique()
   
   genes <- all_mappings %>% dplyr::select(Symbol) %>% filter(Symbol != "") %>% unique() %>% unlist()
@@ -153,7 +162,7 @@ importAuthorsLib <- function(opt) {
     } else if (any(duplicated(data$ID))) {
         log_info("Ignoring supplied sgRNA ID column due to duplicated IDs")
         log_info("Adding sgRNA ID column")
-        data <- cbind(tibble(ID = paste0(opt$project_name, "_", data$sgRNA)), data)
+        data <- cbind(tibble(ID = paste0(opt$project_name, "_", data$sgRNA)), data %>% dplyr::select(-ID))
     } else {
       log_info("Accepting supplied sgRNA ID column")
     }
@@ -243,11 +252,16 @@ runPtgr <- function(blats) {
                         ID = psl$`Q name`,
                         strand = psl$strand)
       out <- tibble(seqnames = as.character(rep(ranges@seqnames@values, ranges@seqnames@lengths)),                                                # evaluate RLE to get the seqnames
-                    start = ranges@ranges@start,
-                    end = ranges@ranges@start + ranges@ranges@width - 1,                                                                          # end is start + width - 1
+                    guideBegin = ranges@ranges@start,
+                    guideFinal = ranges@ranges@start + ranges@ranges@width - 1,                                                                          # end is start + width - 1
                     ID = ranges$ID,
                     strand = rep(ranges@strand@values, ranges@strand@lengths),
-                    assembly = blats$genome[b])
+                    assembly = blats$file_genome[b])
+      out <- out %>% transmute(seqnames, guideBegin, guideFinal, ID, strand, assembly,
+                               start = case_when(strand == "+" ~ guideFinal - 4, # -3 to -4 upstream from PAM is the cut site
+                                                 strand == "-" ~ guideBegin + 3),
+                               end = case_when(strand == "+" ~ guideFinal - 3,
+                                               strand == "-" ~ guideBegin + 4))
       dir.create(dirname(outfile), recursive = T, showWarnings = F)							
       fwrite(out, outfile, sep = "\t") 
       log_info("Wrote genomic hits file to ", outfile)
@@ -374,37 +388,40 @@ runGrtem <- function(blats) {
 # Query biomaRt for human
 queryBiomaRtForHuman <- function(genes, blats) {
   while(file.not.exist.or.zero(blats$file_biomart_out)) {
-    mart <- useEnsembl(biomart = "ENSEMBL_MART_ENSEMBL",
-                       dataset = "hsapiens_gene_ensembl")
+    try({
+      
+      mart <- useEnsembl(biomart = "ENSEMBL_MART_ENSEMBL",
+                         dataset = "hsapiens_gene_ensembl")
     
-    res1 <- getBM(filters = c("entrezgene_accession", "chromosome_name"),
-                  attributes = c("entrezgene_accession", "entrezgene_id", "hgnc_id", "ensembl_gene_id"),
-                  values = list(entrezgene_accession = genes, chromosome_name = c(1:22, "X", "Y")), mart = mart)
-    res2 <- getBM(filters = c("external_gene_name", "chromosome_name"),
-                  attributes = c("external_gene_name", "entrezgene_id", "hgnc_id", "ensembl_gene_id"),
-                  values = list(external_gene_name = genes, chromosome_name = c(1:22, "X", "Y")), mart = mart)
-    res3 <- getBM(filters = c("hgnc_symbol", "chromosome_name"),
-                  attributes = c("hgnc_symbol", "entrezgene_id", "hgnc_id", "ensembl_gene_id"),
-                  values = list(hgnc_symbol = genes, chromosome_name = c(1:22, "X", "Y")), mart = mart)
-    
-    res <- tibble(Symbol = genes) %>%
-      left_join(res1, by = c("Symbol" = "entrezgene_accession")) %>%
-      left_join(res2, by = c("Symbol" = "external_gene_name")) %>%
-      left_join(res3, by = c("Symbol" = "hgnc_symbol")) %>%
-      transmute(Symbol,
-                Ensembl_gene_ID = case_when(!is.na(ensembl_gene_id.x) ~ ensembl_gene_id.x,
-                                            !is.na(ensembl_gene_id.y) ~ ensembl_gene_id.y,
-                                            !is.na(ensembl_gene_id)   ~ ensembl_gene_id),
-                NCBI_gene_ID = case_when(!is.na(entrezgene_id.x) ~ entrezgene_id.x,
-                                         !is.na(entrezgene_id.y) ~ entrezgene_id.y,
-                                         !is.na(entrezgene_id)   ~ entrezgene_id),
-                HGNC_ID = case_when(!is.na(hgnc_id.x) ~ hgnc_id.x,
-                                    !is.na(hgnc_id.y) ~ hgnc_id.y,
-                                    !is.na(hgnc_id)   ~ hgnc_id)) %>%
-      unique()
-    
-    dir.create(dirname(blats$file_biomart_out), recursive = T, showWarnings = F)
-    fwrite(res, blats$file_biomart_out, sep = "\t")
+      res1 <- getBM(filters = c("entrezgene_accession", "chromosome_name"),
+                    attributes = c("entrezgene_accession", "entrezgene_id", "hgnc_id", "ensembl_gene_id"),
+                    values = list(entrezgene_accession = genes, chromosome_name = c(1:22, "X", "Y")), mart = mart)
+      res2 <- getBM(filters = c("external_gene_name", "chromosome_name"),
+                    attributes = c("external_gene_name", "entrezgene_id", "hgnc_id", "ensembl_gene_id"),
+                    values = list(external_gene_name = genes, chromosome_name = c(1:22, "X", "Y")), mart = mart)
+      res3 <- getBM(filters = c("hgnc_symbol", "chromosome_name"),
+                    attributes = c("hgnc_symbol", "entrezgene_id", "hgnc_id", "ensembl_gene_id"),
+                    values = list(hgnc_symbol = genes, chromosome_name = c(1:22, "X", "Y")), mart = mart)
+      
+      res <- tibble(Symbol = genes) %>%
+        left_join(res1, by = c("Symbol" = "entrezgene_accession")) %>%
+        left_join(res2, by = c("Symbol" = "external_gene_name")) %>%
+        left_join(res3, by = c("Symbol" = "hgnc_symbol")) %>%
+        transmute(Symbol,
+                  Ensembl_gene_ID = case_when(!is.na(ensembl_gene_id.x) ~ ensembl_gene_id.x,
+                                              !is.na(ensembl_gene_id.y) ~ ensembl_gene_id.y,
+                                              !is.na(ensembl_gene_id)   ~ ensembl_gene_id),
+                  NCBI_gene_ID = case_when(!is.na(entrezgene_id.x) ~ entrezgene_id.x,
+                                           !is.na(entrezgene_id.y) ~ entrezgene_id.y,
+                                           !is.na(entrezgene_id)   ~ entrezgene_id),
+                  HGNC_ID = case_when(!is.na(hgnc_id.x) ~ hgnc_id.x,
+                                      !is.na(hgnc_id.y) ~ hgnc_id.y,
+                                      !is.na(hgnc_id)   ~ hgnc_id)) %>%
+        unique()
+      
+      dir.create(dirname(blats$file_biomart_out), recursive = T, showWarnings = F)
+      fwrite(res, blats$file_biomart_out, sep = "\t")
+    }, silent = T)
   }
   
   biomart <- fread(blats$file_biomart_out)
@@ -463,14 +480,20 @@ crispieRnegctrls <- function(premaster, blats, opt) {
   # Create a report of negative controls which map to exons
   if (!is.null(opt$control_string)) {
     log_info("Creating a report of negative controls which map to exons")
+    
     all_control_guides <- rep(F, nrow(premaster))
+    
     neg_control_strings <- opt$control_string[opt$control_type == "Non-targeting"]
     
-    for (s in 1:length(neg_control_strings)) {
-      control_guides <- grepl(neg_control_strings[s], premaster$Original_symbol) | grepl(neg_control_strings[s], premaster$ID) # search for the control string in authors' symbols and IDs
+    for (s in 1:length(opt$control_string)) {
+      log_info("Replacing ", opt$control_string[s], " with ", opt$control_type[s])
+      control_guides <- rep(F, nrow(premaster))
+      if ("Original_symbol" %in% names(premaster)) control_guides <- control_guides | grepl(opt$control_string[s], premaster$Original_symbol)
+      if ("ID" %in% names(premaster)) control_guides <- control_guides | grepl(opt$control_string[s], premaster$ID) # search for the control string in authors' symbols and IDs if those columns exist
       if (!is.null(opt$comment_col)) {
-        control_guides <- control_guides | grepl(neg_control_strings[s], premaster$Notes) # also search authors' notes if specified
-      }
+        for (m in grep("^Notes", names(premaster))) {
+          control_guides <- control_guides | grepl(opt$control_string[s], premaster[[m]]) # also search authors' notes if specified
+        }      }
       
       all_control_guides <- all_control_guides | control_guides
       
@@ -505,9 +528,13 @@ crispieRmaster <- function(premaster, blats, opt) {
   if (!is.null(opt$control_string)) {
     for (s in 1:length(opt$control_string)) {
       log_info("Replacing ", opt$control_string[s], " with ", opt$control_type[s])
-      control_guides <- grepl(opt$control_string[s], premaster$Original_symbol) | grepl(opt$control_string[s], premaster$ID) # search for the control string in authors' symbols and IDs
+      control_guides <- rep(F, nrow(premaster))
+      if ("Original_symbol" %in% names(premaster)) control_guides <- control_guides | grepl(opt$control_string[s], premaster$Original_symbol)
+      if ("ID" %in% names(premaster)) control_guides <- control_guides | grepl(opt$control_string[s], premaster$ID) # search for the control string in authors' symbols and IDs if those columns exist
       if (!is.null(opt$comment_col)) {
-        control_guides <- control_guides | grepl(opt$control_string[s], premaster$Notes) # also search authors' notes if specified
+        for (m in grep("^Notes", names(premaster))) {
+          control_guides <- control_guides | grepl(opt$control_string[s], premaster[[m]]) # also search authors' notes if specified
+        }
       }
       if (opt$control_retain) {
         premaster$Control_type[control_guides] <- opt$control_type[s]   # Map control guides to control annotations in a new column
@@ -532,73 +559,84 @@ crispieRmaster <- function(premaster, blats, opt) {
 # Infer intended target per authors' original symbols and write
 crispieRinferTargets <- function(master, blats, opt) {
   
-  if (opt$control_retain) {
-    simple <- master %>%
-      dplyr::select(grep("ymbol|Ensembl|NCBI|HGNC|Control_type", names(master)))
-  } else {
-    simple <- master %>%
-      dplyr::select(grep("ymbol|Ensembl|NCBI|HGNC", names(master)))
-  }
-  
-  # Load in gene symbol annotations for ranking. This file contains all possible approved symbols and gene classes
-  annot <- fread(opt$file_feature_priorities)
-  names(annot) <- c("Approved_symbol", "Locus_group")
-  if (opt$species == "Human") {
-    annot$Locus_group <- factor(annot$Locus_group, ordered = T, levels = c("protein-coding gene", "non-coding RNA", "pseudogene", "other")) 
-  } else if (opt$species == "Mouse") {
-    annot$Locus_group <- factor(annot$Locus_group, ordered = T, levels = c("protein coding gene", "pseudogene", "polymorphic pseudogene", "ribozyme gene", "rRNA gene", "scRNA gene", "snoRNA gene", "snRNA gene", "tRNA gene", "RNase MRP RNA gene", "RNase P RNA gene", "SRP RNA gene", "telomerase RNA gene", "miRNA gene", "antisense lncRNA gene", "sense intronic lncRNA gene", "sense overlapping lncRNA gene", "non-coding RNA gene", "bidirectional promoter lncRNA gene", "lncRNA gene", "lincRNA gene", "gene segment", "pseudogenic gene segment", "unclassified gene", "unclassified non-coding RNA gene", "heritable phenotypic marker", "other")) 
-  }
-  
-  # Infer
-  log_info("Inferring intended targets per original symbol...")
-  
-  simple_dup <- simple %>%
-    left_join(annot, by = c("Symbol" = "Approved_symbol"))                  # Join the multi-mapped original symbols to annotations for their mapping target
-  simple_dup$Locus_group[which(is.na(simple_dup$Locus_group))] <- "other"
-
-  simple_dup <- simple_dup %>% filter(!grepl(paste0(c("X", opt$control_type), collapse = "|"), Symbol)) # Remove controls and unmapped guides when considering intended target
-  
-  dup <- unique(simple_dup$Original_symbol)
-  
-  # Fix multi-mapped original symbols
-  simple_fixed <- tibble()                                                                # Initialise a tibble to contain fixed, singly-mapped original symbols
-  j <- 1
-  tot <- length(dup) 
-  log_info("Inferring intended targets... ")
-  for (s in dup) {  
-    q <- simple_dup %>% filter(Original_symbol == s)
-    cons <- q %>%                                                                         # Determine the candidates that appeared the most often
-      group_by(Symbol) %>%
-      summarise(consensus = n()) %>%
-      mutate(consensus = case_when(consensus == max(consensus) ~ 1,
-                                   T ~ 0))
-    q <- q %>% left_join(cons, by = "Symbol") %>% filter(consensus == 1)                  # Eliminate candidates which did not appear the most times
-    q <- q %>% mutate(fit_rank = case_when(Symbol == Original_symbol ~ 0,                 # Rank remaining, tied 1st place candidates: identical names > protein-coding > ncRNA > pseudogene > others
-                                           T ~ as.numeric(Locus_group)))
-    accept <- q %>% filter(fit_rank == min(fit_rank)) %>% arrange(Symbol) %>% head(1)     # If the top rank is still tied, accept the first match alphabetically
-    simple_fixed <- rbind(simple_fixed, accept)
-    j <- j + 1
-    if(j %% 1000 == 0) {
-      log_info("Inferring intended targets... ", j, " out of ", tot, " done...")
+  if(file.not.exist.or.zero(blats$file_crispier_intended_targets_out)) {
+    
+    if (opt$control_retain) {
+      simple <- master %>%
+        dplyr::select(grep("ymbol|Ensembl|NCBI|HGNC|Control_type", names(master)))
+    } else {
+      simple <- master %>%
+        dplyr::select(grep("ymbol|Ensembl|NCBI|HGNC", names(master)))
     }
+    
+    # Load in gene symbol annotations for ranking. This file contains all possible approved symbols and gene classes
+    annot <- fread(opt$file_feature_priorities)
+    names(annot) <- c("Approved_symbol", "Locus_group")
+    if (opt$species == "Human") {
+      annot$Locus_group <- factor(annot$Locus_group, ordered = T, levels = c("protein-coding gene", "non-coding RNA", "pseudogene", "other")) 
+    } else if (opt$species == "Mouse") {
+      annot$Locus_group <- factor(annot$Locus_group, ordered = T, levels = c("protein coding gene", "pseudogene", "polymorphic pseudogene", "ribozyme gene", "rRNA gene", "scRNA gene", "snoRNA gene", "snRNA gene", "tRNA gene", "RNase MRP RNA gene", "RNase P RNA gene", "SRP RNA gene", "telomerase RNA gene", "miRNA gene", "antisense lncRNA gene", "sense intronic lncRNA gene", "sense overlapping lncRNA gene", "non-coding RNA gene", "bidirectional promoter lncRNA gene", "lncRNA gene", "lincRNA gene", "gene segment", "pseudogenic gene segment", "unclassified gene", "unclassified non-coding RNA gene", "heritable phenotypic marker", "other")) 
+    }
+    
+    # Infer
+    log_info("Inferring intended targets per original symbol...")
+    
+    simple_dup <- simple %>%
+      left_join(annot, by = c("Symbol" = "Approved_symbol"))                  # Join the multi-mapped original symbols to annotations for their mapping target
+    simple_dup$Locus_group[which(is.na(simple_dup$Locus_group))] <- "other"
+    
+    simple_dup <- simple_dup %>% filter(!grepl(paste0(c("^X$", opt$control_type), collapse = "|"), Symbol)) # Remove controls and unmapped guides when considering intended target
+    
+    dup <- unique(simple_dup$Original_symbol)
+    
+    # Fix multi-mapped original symbols
+    simple_fixed <- tibble()                                                                # Initialise a tibble to contain fixed, singly-mapped original symbols
+    j <- 1
+    tot <- length(dup) 
+    log_info("Inferring intended targets... ")
+    for (s in dup) {  
+      q <- simple_dup %>% filter(Original_symbol == s)
+      cons <- q %>%                                                                         # Determine the candidates that appeared the most often
+        group_by(Symbol) %>%
+        summarise(consensus = n()) %>%
+        mutate(consensus = case_when(consensus == max(consensus) ~ 1,
+                                     T ~ 0))
+      q <- q %>% left_join(cons, by = "Symbol") %>% filter(consensus == 1)                  # Eliminate candidates which did not appear the most times
+      q <- q %>% mutate(fit_rank = case_when(Symbol == Original_symbol ~ 0,                 # Rank remaining, tied 1st place candidates: identical names > protein-coding > ncRNA > pseudogene > others
+                                             T ~ as.numeric(Locus_group)))
+      accept <- q %>% filter(fit_rank == min(fit_rank)) %>% arrange(Symbol) %>% head(1)     # If the top rank is still tied, accept the first match alphabetically
+      simple_fixed <- rbind(simple_fixed, accept)
+      j <- j + 1
+      if(j %% 1000 == 0) {
+        log_info("Inferring intended targets... ", j, " out of ", tot, " done...")
+      }
+    }
+    log_info("Inferring intended targets... ", tot, " out of ", tot, " done.")
+    
+    # Combine
+    if("Locus_group" %in% names(simple_fixed)) {
+      simple <- simple_fixed %>% dplyr::select(-Locus_group, -fit_rank, -consensus)
+    } else {
+      simple <- simple_fixed
+    }
+    # }
+    
+    simple <- simple %>%
+      dplyr::select(grep("ymbol|Ensembl|NCBI|HGNC", names(simple))) %>%
+      unique()
+    
+    # Attach controls mappings without inference
+    simple_controls <- master %>%
+      dplyr::select(Original_symbol, Symbol) %>%
+      unique() %>%
+      filter(Symbol %in% opt$control_type) %>%
+      unique()
+    simple <- bind_rows(simple, simple_controls)
+    
+    outfile_s_tsv <- blats$file_crispier_intended_targets_out
+    dirwrite(simple, outfile_s_tsv, sep = "\t")
+    log_info("Wrote simplified library to ", outfile_s_tsv)
   }
-  log_info("Inferring intended targets... ", tot, " out of ", tot, " done.")
-  
-  # Combine
-  if("Locus_group" %in% names(simple_fixed)) {
-    simple <- simple_fixed %>% dplyr::select(-Locus_group, -fit_rank, -consensus)
-  } else {
-    simple <- simple_fixed
-  }
-  # }
-  
-  simple <- simple %>%
-    dplyr::select(grep("ymbol|Ensembl|NCBI|HGNC", names(simple))) %>%
-    unique()
-  
-  outfile_s_tsv <- blats$file_crispier_intended_targets_out
-  dirwrite(simple, outfile_s_tsv, sep = "\t")
-  log_info("Wrote simplified library to ", outfile_s_tsv)
   
 }
 
@@ -613,7 +651,7 @@ fixOpts <- function(opt) {
   if(!is.null(opt$adapters))       opt$adapters       <- commasplit(opt$adapters)
   if(!is.null(opt$PAM))            opt$PAM            <- commasplit(opt$PAM)
   if(!is.null(opt$symbol_col))     opt$symbol_col     <- rangesplit(opt$symbol_col)
-  if(!is.null(opt$comment_col))    opt$comment_col    <- commasplit(opt$comment_col) %>% as.numeric()
+  if(!is.null(opt$comment_col))    opt$comment_col    <- rangesplit(opt$comment_col)
   if(!is.null(opt$skip)) {         opt$skip           <- commasplit(opt$skip) %>% as.numeric() } else opt$skip <- 0
   if(!is.null(opt$control_string)) opt$control_string <- commasplit(opt$control_string)
   if(!is.null(opt$control_type))   opt$control_type   <- commasplit(opt$control_type)
@@ -628,7 +666,7 @@ fixOpts <- function(opt) {
   warnings <- list()
   # check if infiles exist
   for (x in opt$infiles) {
-    if(!file.exists(x)) {
+    if(!file.exists(Sys.glob(paste0(x, "*"))[1])) {
       errors <- c(errors, paste0("File not found: ", x, "."))
     }
   }
@@ -708,28 +746,28 @@ fixOpts <- function(opt) {
 ## Execution (IDE)
 if (interactive()) {
   opt <- list()
-  opt$infiles <- "testlib/author/test1.txt"
-  opt$mode <- "KO"
-  opt$kind <- "txt"
+  opt$infiles <- "data/combo_library.1.3guides.tsv"
+  opt$mode <- NULL
+  opt$kind <- NULL
   opt$sheet <- NULL
   opt$id_col <- NULL
   opt$grna_col <- "1"
   opt$adapters <- NULL
-  opt$PAM <- "NGG"
-  opt$symbol_col <- "2"
+  opt$PAM <- NULL
+  opt$symbol_col <- NULL
   opt$symbol_trim <- NULL
-  opt$comment_col <- NULL
+  opt$comment_col <- "2"
   opt$skip <- NULL
   opt$header <- T
   opt$species <- "Human"
-  opt$control_string <- "^NEG_CONTROL"
+  opt$control_string <- "NonTargeting"
   opt$control_type <- "Non-targeting"
   opt$control_retain <- NULL
-  opt$project_name <- "testlib"
-  opt$file_genome <- "data/hg38.2020-09-22.2bit,data/hg19.2020-01-15.2bit"
-  opt$file_exons <- "data/hg38.refseq.exons.tsv,data/hg19.refseq.exons.tsv"
-  opt$file_feature_priorities <- "data/symbol_ids_table.csv"
-  opt$outdir <- "."
+  opt$project_name <- "Panton"
+  opt$file_genome <- "/Users/simonlam/bio/Projects/dev/crispieR/data/hg38.2020-09-22.2bit"
+  opt$file_exons <- "/Users/simonlam/bio/Projects/dev/crispieR/data/hg38.refseq.exons.tsv"
+  opt$file_feature_priorities <- "/Users/simonlam/bio/Projects/dev/crispieR/data/symbol_ids_table.csv"
+  opt$outdir <- "crispieR/"
 }
 
 ## Execution (commandline)
