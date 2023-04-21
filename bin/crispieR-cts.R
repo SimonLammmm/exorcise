@@ -39,8 +39,9 @@ library(foreach)
 # 0.22      2023-02-27T12-32-43   Added globbed filename functionality
 # 0.23      2023-03-13T14:36:48   Fixed to retain the "guide" column if already exists in input file
 # 0.24      2023-03-13T14:38:33   Fixed to retain the metadata columns other than numerics
+# 0.3       2023-03-21T17:07:30   Allowing Ns in counts file sequence rather than erroring. These will be filtered out
 
-version <- 0.24
+version <- 0.3
 
 ##### FUNCTIONS ####
 
@@ -66,9 +67,13 @@ reannotateCts <- function(opt2) {
   
   log_info("Using ", cts_sgRNA_col, " to join guide RNA sequences to new annotations...")
   guides <- cts[[cts_sgRNA_col]]
-  if(any(grepl("[^ACGTacgt]", guides))) {
-    log_error("Non-nucleotide (ACTG) character found in column ", opt2$sgRNA, ": \"", cts_sgRNA_col, "\" in file: \"", opt2$cts, "\". Exiting.")
+  if(any(grepl("[^ACGTNacgtn]", guides))) {
+    log_error("Non-nucleotide (ACTGN) character found in column ", opt2$sgRNA, ": \"", cts_sgRNA_col, "\" in file: \"", opt2$cts, "\". Exiting.")
     panic()
+  }
+  if(any(grepl("[Nn]", guides))) {
+    log_info("Ns found in sequence, column ", opt2$sgRNA, ": \"", cts_sgRNA_col, "\" in file: \"", opt2$cts, "\". Filtering these out.")
+    cts <- cts %>% filter(!grepl("[Nn]", opt2$sgRNA))
   }
   
   log_info("Reannotating...")

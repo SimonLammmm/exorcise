@@ -28,8 +28,9 @@
 # 0.2           2023-02-20T17:00:30   fixed various bugs
 # 0.21          2023-03-02T11:38:40   fixed issue with infile type inference
 # 0.3           2023-03-10T13:54:14   refined to account for spCas9 cut site
+# 0.31          2023-04-11T14:54:52   fixed to add genomic coordinates of guide hits outside of exomes
 
-ver <- 0.3
+ver <- 0.31
 
 #### INIT ####
 suppressPackageStartupMessages({
@@ -123,8 +124,10 @@ reannotateLib <- function(opt) {
   all_mappings <- foreach(b = 1:length(blats$file_genomic_ranges), .combine = "bind_rows") %do% { # generate mapping
     genome_hits <- fread(blats$file_genomic_ranges[b], colClasses = "character")
     exome_hits <- fread(blats$file_genomic_ranges_matched[b], colClasses = "character")
-    left_join(exome_hits, genome_hits, by = c("seqnames", "start", "end", "ID", "strand", "assembly"))
-  } %>% filter(!is.na(Symbol)) %>% unique()
+    left_join(genome_hits, exome_hits, by = c("seqnames", "start", "end", "ID", "strand", "assembly"))
+  } %>%
+  #filter(!is.na(Symbol)) %>%
+  unique()
   
   genes <- all_mappings %>% dplyr::select(Symbol) %>% filter(Symbol != "") %>% unique() %>% unlist()
   
