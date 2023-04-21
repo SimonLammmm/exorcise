@@ -11,6 +11,7 @@
 #
 # Version history:
 # SL    25-Jan-2023     0.1.0     Initial release
+# SL    05-Apr-2023     0.1.1     Fixed multi-file checker, added nrows functionality, fixed for "multi-column" FASTQ files
 #
 #
 
@@ -31,7 +32,7 @@ ver <- "0.1.0"
 
 #### Main loop ####
 
-ntByCycle <- function(infiles, outdir) {
+ntByCycle <- function(infiles, outdir, nrows) {
   
   # Analyse one infile at a time
   for (f in 1:length(infiles)) {
@@ -41,8 +42,8 @@ ntByCycle <- function(infiles, outdir) {
     
     # Read infile
     log_info("Reading file ", f, " of ", length(infiles), ": ", infiles[f], "...")
-    fastq <- fread(infiles[f], header = F)                                      # Read infile
-    fastq <- fastq %>% filter(!grepl("[^ATCGN]+", V1))                          # Keep only sequence lines
+    fastq <- fread(infiles[f], header = F, nrows = nrows, fill = TRUE)                                      # Read infile
+    fastq <- fastq %>% filter(!grepl("[^ATCGN]+", V1)) %>% select(V1)                          # Keep only sequence lines
     
     # Determine number of reads
     reads <- length(fastq$V1)
@@ -66,7 +67,7 @@ ntByCycle <- function(infiles, outdir) {
       geom_line() +
       ggtitle(infile_friendly)
     
-    q <- ggplotly(p)
+    #q <- ggplotly(p)
     
     # Export
     outfile <- paste0(outdir, "/", infile_friendly, ".pdf")
@@ -91,7 +92,9 @@ if (!interactive()) {                                                           
     make_option(opt_str = c("-f", "--file"), type = "character", default = NULL,
                 help = "Path to FASTQ file(s). Accepts gzipped FASTQ files. If a directory is supplied, then all files ending with .fastq and .fastq.gz will be accepted.", metavar = "character"),
     make_option(opt_str = c("-o", "--out"), type = "character", default = ".",
-                help = "Optional. Path to directory to output the result. Defaults to the current working directory.", metavar = "character")
+                help = "Optional. Path to directory to output the result. Defaults to the current working directory.", metavar = "character"),
+    make_option(opt_str = c("-n", "--nrows"), type = "numeric", default = Inf,
+                help = "Optional. How many rows to read from the top of the FASTQ file(s). Default Inf.", metavar = "numeric")
   )
   
   opt_parser = OptionParser(option_list = option_list)
@@ -99,8 +102,9 @@ if (!interactive()) {                                                           
   
 } else {                                                                        # If we're running in an IDE, take inputs from this block instead
   opt <- NULL
-  opt$file <- "/Volumes/files/research/sjlab/data/group_folders/jwilson/221122_ST-J00104_0301_AHTMY2BBXY_8_R1_DMSO_S127647_1.fastq.gz"
+  opt$file <- "/Volumes/files/research/sjlab/archive/fs01/Sequencing/NovaSeq FASTQ/NVS044-329912606/FASTQ_Generation_2022-02-15_13_02_45Z-528623110/SPJms2050_d9_1_L001-ds.42b4dfdc570040c383437762aeb36e89/SPJms2050-d9-1_S1_L001_R1_001.fastq.gz"
   opt$out <- "~/bio/Sandbox/ntByCycle"
+  opt$nrows <- 10
 }
 
 #### Error checking ####
@@ -170,17 +174,18 @@ if (length(infiles) == 0) {
 log_info("Found these fastq files:\n", paste(infiles, collapse = "\n"))
 
 # Warn the user that it'll take a long time if more than one infile was selected
-if (length(infiles > 1)) {
+if (length(infiles) > 1) {
   log_warn("You have selected ", length(infiles), " fastq files to analyse with ntByCycle. It is recommended to analyse one file at a time. Analysing too many files will take a long time. Are you sure you want to continue?")
-}
 
 # Wait for user to authorise
-Sys.sleep(1)
-invisible(readline(prompt = "Press [enter] to continue."))
+  Sys.sleep(1)
+  invisible(readline(prompt = "Press [enter] to continue."))
+}
 
+nrows <- opt$nrows
 
 #### Execution ####
 
-ntByCycle(infiles, outdir)
+ntByCycle(infiles, outdir, nrows)
 end_time <- proc.time()
 log_info("crispieR-cts process completed in ", (end_time - start_time)[[3]], " seconds.")
