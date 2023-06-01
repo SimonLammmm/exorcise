@@ -29,8 +29,10 @@
 # 0.21          2023-03-02T11:38:40   fixed issue with infile type inference
 # 0.3           2023-03-10T13:54:14   refined to account for spCas9 cut site
 # 0.31          2023-04-11T14:54:52   fixed to add genomic coordinates of guide hits outside of exomes
+# 0.32          2023-05-25T10:55:03   enabled bypassing biomart mapping by setting the species to anything other than Human or Mouse
+# 0.33          2023-05-25T14:17:41   increased stringency of BLAT. in a future version, these parameters will be tuneable
 
-ver <- 0.31
+ver <- 0.33
 
 #### INIT ####
 suppressPackageStartupMessages({
@@ -130,12 +132,16 @@ reannotateLib <- function(opt) {
   unique()
   
   genes <- all_mappings %>% dplyr::select(Symbol) %>% filter(Symbol != "") %>% unique() %>% unlist()
+  premaster <- left_join(authors, all_mappings, by = "ID")
   
-  if(opt$species == "Human") { biomart <- queryBiomaRtForHuman(genes, blats) }
-  if(opt$species == "Mouse") { biomart <- queryBiomaRtForMouse(genes, blats) }
-  
-  premaster <- left_join(authors, all_mappings, by = "ID") %>%
-    left_join(biomart, by = "Symbol") %>% unique()
+  if(opt$species == "Human") {
+    biomart <- queryBiomaRtForHuman(genes, blats)
+    premaster <- premaster %>% left_join(biomart, by = "Symbol") %>% unique()
+  }
+  if(opt$species == "Mouse") {
+    biomart <- queryBiomaRtForMouse(genes, blats)
+    premaster <- premaster %>% left_join(biomart, by = "Symbol") %>% unique()
+  }
   
   master <- crispieRmaster(premaster, blats, opt)
   crispieRnegctrls(premaster, blats, opt)
@@ -219,7 +225,7 @@ extractGuides <- function(opt, authors, blats) {
 # Run BLAT
 runBlat <- function(blats) {
   blat_command <- "blat"                                                   # external scripts and common parameters
-  blat_params <- "-stepSize=5 -tileSize=11 -fine -repMatch=2000000 -minScore=20 -minIdentity=100"
+  blat_params <- "-stepSize=4 -tileSize=10 -fine -repMatch=2000000 -minScore=20 -minIdentity=100"
   
   for (b in 1:length(blats$file_genome)) {
     while(file.not.exist.or.zero(blats$file_psl[b])) {
