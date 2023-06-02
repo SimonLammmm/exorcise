@@ -12,6 +12,7 @@
 # Version history:
 # SL    25-Jan-2023     0.1.0     Initial release
 # SL    05-Apr-2023     0.1.1     Fixed multi-file checker, added nrows functionality, fixed for "multi-column" FASTQ files
+# SL    02-Jun-2023     0.2.0     Fixed ignored zero frequency, fixed log exit message
 #
 #
 
@@ -53,13 +54,28 @@ ntByCycle <- function(infiles, outdir, nrows) {
     
     # Populate nucleotide frequencies by cycle number
     log_info("Determining nucleotide frequencies...")
-    freq <- data.frame()
+    freq <- tibble()
     for (c in 1:cycles) {
       freq <- rbind(freq, data.frame(Cycle = c, table(sapply(fastq, function(x) substr(x, c,c)))))
     }
     
     # Determine nucleotide percentages by cycle number
     freq <- freq %>% transmute(Cycle, Base = Var1, Freq, Pct = Freq / reads)    # We assume that exactly one call was made per cycle in each read
+    
+    # Fill where freq is zero
+    alphabet <- unique(freq$Base)
+    dummy <- tibble(Cycle = rep(1:cycles, length(alphabet)),
+                    Base = foreach(a = alphabet, .final = function(x) unlist(x)) %do% rep(a, cycles),
+                    Freq_dummy = 0,
+                    Pct_dummy = 0)
+    
+    freq <- freq %>%
+      as_tibble() %>%
+      full_join(dummy, by = c("Cycle", "Base")) %>%
+      mutate(Freq = case_when(!is.na(Freq) ~ as.double(Freq),
+                              T ~ as.double(Freq_dummy)),
+             Pct = case_when(!is.na(Pct) ~ as.double(Pct),
+                             T ~ as.double(Pct_dummy)))
     
     # Plot
     log_info("Plotting...")
@@ -100,11 +116,6 @@ if (!interactive()) {                                                           
   opt_parser = OptionParser(option_list = option_list)
   opt = parse_args(opt_parser)
   
-} else {                                                                        # If we're running in an IDE, take inputs from this block instead
-  opt <- NULL
-  opt$file <- "/Volumes/files/research/sjlab/archive/fs01/Sequencing/NovaSeq FASTQ/NVS044-329912606/FASTQ_Generation_2022-02-15_13_02_45Z-528623110/SPJms2050_d9_1_L001-ds.42b4dfdc570040c383437762aeb36e89/SPJms2050-d9-1_S1_L001_R1_001.fastq.gz"
-  opt$out <- "~/bio/Sandbox/ntByCycle"
-  opt$nrows <- 10
 }
 
 #### Error checking ####
@@ -188,4 +199,4 @@ nrows <- opt$nrows
 
 ntByCycle(infiles, outdir, nrows)
 end_time <- proc.time()
-log_info("crispieR-cts process completed in ", (end_time - start_time)[[3]], " seconds.")
+log_info("ntByCycle process completed in ", (end_time - start_time)[[3]], " seconds.")
