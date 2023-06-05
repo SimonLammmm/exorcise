@@ -31,8 +31,10 @@
 # 0.31          2023-04-11T14:54:52   fixed to add genomic coordinates of guide hits outside of exomes
 # 0.32          2023-05-25T10:55:03   enabled bypassing biomart mapping by setting the species to anything other than Human or Mouse
 # 0.33          2023-05-25T14:17:41   increased stringency of BLAT. in a future version, these parameters will be tuneable
+# 0.4           2023-06-05T15:37:35   fixed bug with incorrect calculation of cut site. made cut site width 0
+# 0.41          2023-06-05T16:20:10   improved PAM logic
 
-ver <- 0.33
+ver <- 0.41
 
 #### INIT ####
 suppressPackageStartupMessages({
@@ -211,8 +213,6 @@ importAuthorsLib <- function(opt) {
 extractGuides <- function(opt, authors, blats) {
   log_info("Creating sgRNA FASTA")
   
-  if(is.null(opt$PAM)) opt$PAM <- ""
-  
   sgRNAs <- foreach (PAM = opt$PAM, .combine = "c") %do% {
     paste0(">", authors$ID, "\n", authors$sgRNA, PAM) # convert to fasta
   }
@@ -267,10 +267,10 @@ runPtgr <- function(blats) {
                     strand = rep(ranges@strand@values, ranges@strand@lengths),
                     assembly = blats$file_genome[b])
       out <- out %>% transmute(seqnames, guideBegin, guideFinal, ID, strand, assembly,
-                               start = case_when(strand == "+" ~ guideFinal - 4, # -3 to -4 upstream from PAM is the cut site
-                                                 strand == "-" ~ guideBegin + 3),
-                               end = case_when(strand == "+" ~ guideFinal - 3,
-                                               strand == "-" ~ guideBegin + 4))
+                               start = case_when(strand == "+" ~ guideFinal - (3 + nchar(opt$PAM)), # -3 to -4 upstream from PAM is the cut site
+                                                 strand == "-" ~ guideBegin + (3 + nchar(opt$PAM))),
+                               end = case_when(strand == "+" ~ guideFinal - (3 + nchar(opt$PAM)),
+                                               strand == "-" ~ guideBegin + (3 + nchar(opt$PAM))))
       dir.create(dirname(outfile), recursive = T, showWarnings = F)							
       fwrite(out, outfile, sep = "\t") 
       log_info("Wrote genomic hits file to ", outfile)
@@ -548,10 +548,10 @@ crispieRmaster <- function(premaster, blats, opt) {
       if (opt$control_retain) {
         premaster$Control_type[control_guides] <- opt$control_type[s]   # Map control guides to control annotations in a new column
       } else {
-        premaster$Symbol[control_guides] <- opt$control_type[s]   # Map control guides to control annotations and overwrite approved Symbol column
-        for (t in grep("Ensembl|NCBI|HGNC", names(premaster))) {
-          premaster[[t]][control_guides] <- "X"                   # Remove external annotations
-        }
+        premaster$Symbol[control_guides & premaster$Symbol == "X"] <- opt$control_type[s]   # Map control guides to control annotations unless there is an approved Symbol column
+        # for (t in grep("Ensembl|NCBI|HGNC", names(premaster))) {
+        #   premaster[[t]][control_guides] <- "X"                   # Remove external annotations
+        # }
       }
     }
   }
@@ -658,7 +658,7 @@ fixOpts <- function(opt) {
   if(!is.null(opt$id_col))         opt$id_col         <- commasplit(opt$id_col) %>% as.numeric()
   if(!is.null(opt$grna_col))       opt$grna_col       <- commasplit(opt$grna_col) %>% as.numeric()
   if(!is.null(opt$adapters))       opt$adapters       <- commasplit(opt$adapters)
-  if(!is.null(opt$PAM))            opt$PAM            <- commasplit(opt$PAM)
+  if(!is.null(opt$PAM)) {          opt$PAM            <- commasplit(opt$PAM) } else opt$PAM <- ""
   if(!is.null(opt$symbol_col))     opt$symbol_col     <- rangesplit(opt$symbol_col)
   if(!is.null(opt$comment_col))    opt$comment_col    <- rangesplit(opt$comment_col)
   if(!is.null(opt$skip)) {         opt$skip           <- commasplit(opt$skip) %>% as.numeric() } else opt$skip <- 0
