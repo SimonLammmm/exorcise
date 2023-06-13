@@ -33,6 +33,7 @@
 # 0.33          2023-05-25T14:17:41   increased stringency of BLAT. in a future version, these parameters will be tuneable
 # 0.4           2023-06-05T15:37:35   fixed bug with incorrect calculation of cut site. made cut site width 0
 # 0.41          2023-06-05T16:20:10   improved PAM logic
+# 0.42          2023-06-13T14:07:05   unified priorities specification
 
 ver <- 0.41
 
@@ -289,7 +290,7 @@ inferExomeCols <- function(file_exons) {
   exome_cols$end <- grep("end", exome_headers)
   exome_cols$strand <- "*"                                                      # uncomment to search both strands (default)
   # exome_cols$strand <- grep("str", exome_headers)                             # uncomment to search sense strand only
-  exome_cols$symbol <- grep("symbol|name2", exome_headers)
+  exome_cols$symbol <- grep("symbol|name", exome_headers)
   return(exome_cols)
 }
 
@@ -322,8 +323,8 @@ import_exome <- function(file_exons, exome_cols) {
     exome <- exon_melter(exome, exome_cols)
   }
   seqnames <- exome[[as.numeric(exome_cols$chr)]]
-  ranges <- IRanges(start = exome[[as.numeric(exome_cols$start)]],
-                    end = exome[[as.numeric(exome_cols$end)]])
+  start <- exome[[as.numeric(exome_cols$start)]]
+  end <- exome[[as.numeric(exome_cols$end)]]
   if (exome_cols$strand == "*") {                    # use * if in strandless mode
     strand <- rep("*", nrow(exome))
   } else {
@@ -331,7 +332,10 @@ import_exome <- function(file_exons, exome_cols) {
   }
   symbol <- exome[[as.numeric(exome_cols$symbol)]] %>% gsub(pattern = ",$", replacement = "")
   
-  exome <- GRanges(seqnames = seqnames, ranges = ranges, strand = strand, Symbol = symbol)
+  exome <- tibble(seqnames = seqnames, start = start, end = end, strand = strand, Symbol = symbol) %>%
+    filter(!is.na(seqnames) & !is.na(start) & !is.na(end) & end >= start) %>%
+    mutate(ranges = paste(start, end, sep = "-"))
+  exome <- GRanges(seqnames = exome$seqnames, ranges = exome$ranges, strand = exome$strand, Symbol = exome$Symbol)
   return(exome)
 }
 
@@ -339,8 +343,8 @@ import_hits <- function(file_genomic_ranges, hits_cols) {
   
   hits <- fread(file_genomic_ranges)
   seqnames <- hits[[as.numeric(hits_cols$chr)]]
-  ranges <- IRanges(start = hits[[as.numeric(hits_cols$start)]],
-                    end = hits[[as.numeric(hits_cols$end)]])
+  start <- hits[[as.numeric(hits_cols$start)]]
+  end <- hits[[as.numeric(hits_cols$end)]]
   ID = hits[[as.numeric(hits_cols$id)]]
   if (hits_cols$strand == "*") {                    # use * if in strandless mode
     strand <- rep("*", nrow(hits))
@@ -348,7 +352,10 @@ import_hits <- function(file_genomic_ranges, hits_cols) {
     strand <- hits[[as.numeric(hits_cols$strand)]]
   }
   
-  hits <- GRanges(seqnames = seqnames, ranges = ranges, strand = strand, ID = as.character(ID))
+  hits <- tibble(seqnames = seqnames, start = start, end = end, strand = strand, ID = ID) %>%
+    filter(!is.na(seqnames) & !is.na(start) & !is.na(end) & end >= start) %>%
+    mutate(ranges = paste(start, end, sep = "-"))
+  hits <- GRanges(seqnames = hits$seqnames, ranges = hits$ranges, strand = hits$strand, ID = as.character(hits$ID))
   return(hits)
 }
 
@@ -581,11 +588,7 @@ crispieRinferTargets <- function(master, blats, opt) {
     # Load in gene symbol annotations for ranking. This file contains all possible approved symbols and gene classes
     annot <- fread(opt$file_feature_priorities)
     names(annot) <- c("Approved_symbol", "Locus_group")
-    if (opt$species == "Human") {
-      annot$Locus_group <- factor(annot$Locus_group, ordered = T, levels = c("protein-coding gene", "non-coding RNA", "pseudogene", "other")) 
-    } else if (opt$species == "Mouse") {
-      annot$Locus_group <- factor(annot$Locus_group, ordered = T, levels = c("protein coding gene", "pseudogene", "polymorphic pseudogene", "ribozyme gene", "rRNA gene", "scRNA gene", "snoRNA gene", "snRNA gene", "tRNA gene", "RNase MRP RNA gene", "RNase P RNA gene", "SRP RNA gene", "telomerase RNA gene", "miRNA gene", "antisense lncRNA gene", "sense intronic lncRNA gene", "sense overlapping lncRNA gene", "non-coding RNA gene", "bidirectional promoter lncRNA gene", "lncRNA gene", "lincRNA gene", "gene segment", "pseudogenic gene segment", "unclassified gene", "unclassified non-coding RNA gene", "heritable phenotypic marker", "other")) 
-    }
+    annot$Locus_group <- factor(annot$Locus_group, ordered = T, levels = c("protein-coding gene", "non-coding RNA", "pseudogene", "other")) 
     
     # Infer
     log_info("Inferring intended targets per original symbol...")
