@@ -36,8 +36,9 @@
 # 0.42          2023-06-13T14:07:05   unified priorities specification
 # 0.5           2023-06-14T09:22:05   improved Non-targeting "genes" to 1 guide per "gene" rather than all guides acting as replicates for one "gene"
 # 0.51          2023-06-14T09:43:18   further improved Non-targeting "genes" to 1 guide per "gene" rather than all guides acting as replicates for one "gene"
+# 0.52          2023-06-14T10:24:18   further improved Non-targeting "genes" to 1 guide per "gene" rather than all guides acting as replicates for one "gene"
 
-ver <- 0.51
+ver <- 0.52
 
 #### INIT ####
 suppressPackageStartupMessages({
@@ -645,7 +646,7 @@ crispieRinferTargets <- function(master, blats, opt) {
     simple_controls <- master %>%
       dplyr::select(Original_symbol, Symbol) %>%
       unique() %>%
-      filter(Symbol %in% opt$control_type) %>%
+      filter(grepl(paste0(paste0("^", opt$control_type, "\\d+"), collapse = "|"), Symbol)) %>%
       unique()
     simple <- bind_rows(simple, simple_controls)
     
