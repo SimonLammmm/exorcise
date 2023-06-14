@@ -34,8 +34,9 @@
 # 0.4           2023-06-05T15:37:35   fixed bug with incorrect calculation of cut site. made cut site width 0
 # 0.41          2023-06-05T16:20:10   improved PAM logic
 # 0.42          2023-06-13T14:07:05   unified priorities specification
+# 0.5           2023-06-14T09:22:05   improved Non-targeting "genes" to 1 guide per "gene" rather than all guides acting as replicates for one "gene"
 
-ver <- 0.41
+ver <- 0.5
 
 #### INIT ####
 suppressPackageStartupMessages({
@@ -535,7 +536,8 @@ crispieRmaster <- function(premaster, blats, opt) {
   }
   
   if(is.null(opt$control_string)) {
-    premaster$Symbol[which(premaster$Symbol == "X")] <- "Non-targeting"
+    ncontrols <- length(premaster$Symbol[which(premaster$Symbol == "X")])
+    premaster$Symbol[which(premaster$Symbol == "X")] <- paste0("Non-targeting", 1:ncontrols)
   }
   
   # Fix controls
