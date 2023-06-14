@@ -35,8 +35,9 @@
 # 0.41          2023-06-05T16:20:10   improved PAM logic
 # 0.42          2023-06-13T14:07:05   unified priorities specification
 # 0.5           2023-06-14T09:22:05   improved Non-targeting "genes" to 1 guide per "gene" rather than all guides acting as replicates for one "gene"
+# 0.51          2023-06-14T09:43:18   further improved Non-targeting "genes" to 1 guide per "gene" rather than all guides acting as replicates for one "gene"
 
-ver <- 0.5
+ver <- 0.51
 
 #### INIT ####
 suppressPackageStartupMessages({
@@ -557,7 +558,8 @@ crispieRmaster <- function(premaster, blats, opt) {
       if (opt$control_retain) {
         premaster$Control_type[control_guides] <- opt$control_type[s]   # Map control guides to control annotations in a new column
       } else {
-        premaster$Symbol[control_guides & premaster$Symbol == "X"] <- opt$control_type[s]   # Map control guides to control annotations unless there is an approved Symbol column
+        nThisControl <- length(premaster$Symbol[control_guides & premaster$Symbol == "X"])
+        premaster$Symbol[control_guides & premaster$Symbol == "X"] <- paste0(opt$control_type[s], 1:nThisControl)   # Map control guides to control annotations unless there is an approved Symbol column
         # for (t in grep("Ensembl|NCBI|HGNC", names(premaster))) {
         #   premaster[[t]][control_guides] <- "X"                   # Remove external annotations
         # }
