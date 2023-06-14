@@ -602,7 +602,7 @@ crispieRinferTargets <- function(master, blats, opt) {
       left_join(annot, by = c("Symbol" = "Approved_symbol"))                  # Join the multi-mapped original symbols to annotations for their mapping target
     simple_dup$Locus_group[which(is.na(simple_dup$Locus_group))] <- "other"
     
-    simple_dup <- simple_dup %>% filter(!grepl(paste0(c("^X$", opt$control_type), collapse = "|"), Symbol)) # Remove controls and unmapped guides when considering intended target
+    simple_dup <- simple_dup %>% filter(!grepl(paste0(paste0("^", c("X", opt$control_type), "\\d+$"), collapse = "|"), Symbol)) # Remove controls and unmapped guides when considering intended target
     
     dup <- unique(simple_dup$Original_symbol)
     
@@ -646,7 +646,7 @@ crispieRinferTargets <- function(master, blats, opt) {
     simple_controls <- master %>%
       dplyr::select(Original_symbol, Symbol) %>%
       unique() %>%
-      filter(grepl(paste0(paste0("^", opt$control_type, "\\d+"), collapse = "|"), Symbol)) %>%
+      filter(grepl(paste0(paste0("^", opt$control_type, "\\d+$"), collapse = "|"), Symbol)) %>%
       unique()
     simple <- bind_rows(simple, simple_controls)
     
