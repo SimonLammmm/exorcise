@@ -13,7 +13,7 @@
 # SL    25-Jan-2023     0.1.0     Initial release
 # SL    05-Apr-2023     0.1.1     Fixed multi-file checker, added nrows functionality, fixed for "multi-column" FASTQ files
 # SL    02-Jun-2023     0.2.0     Fixed ignored zero frequency, fixed log exit message
-#
+# SL    12-Jul-2023     0.3.0     Enabled minor gridlines. Enabled interactive plotting. Enabled custom start and end cycles
 #
 
 #### Init ####
@@ -29,11 +29,11 @@ suppressPackageStartupMessages({
   library(foreach)
 })
 
-ver <- "0.1.0"
+ver <- "0.3.0"
 
 #### Main loop ####
 
-ntByCycle <- function(infiles, outdir, nrows) {
+ntByCycle <- function(infiles, outdir, nrows, start, end) {
   
   # Analyse one infile at a time
   for (f in 1:length(infiles)) {
@@ -51,11 +51,12 @@ ntByCycle <- function(infiles, outdir, nrows) {
     
     # Determine number of cycles
     cycles <- max(sapply(fastq, function(x) nchar(x)))
+    cycles <- min(cycles, end)
     
     # Populate nucleotide frequencies by cycle number
     log_info("Determining nucleotide frequencies...")
     freq <- tibble()
-    for (c in 1:cycles) {
+    for (c in start:cycles) {
       freq <- rbind(freq, data.frame(Cycle = c, table(sapply(fastq, function(x) substr(x, c,c)))))
     }
     
@@ -64,8 +65,8 @@ ntByCycle <- function(infiles, outdir, nrows) {
     
     # Fill where freq is zero
     alphabet <- unique(freq$Base)
-    dummy <- tibble(Cycle = rep(1:cycles, length(alphabet)),
-                    Base = foreach(a = alphabet, .final = function(x) unlist(x)) %do% rep(a, cycles),
+    dummy <- tibble(Cycle = rep(start:cycles, length(alphabet)),
+                    Base = foreach(a = alphabet, .final = function(x) unlist(x)) %do% rep(a, cycles-start+1),
                     Freq_dummy = 0,
                     Pct_dummy = 0)
     
@@ -81,9 +82,10 @@ ntByCycle <- function(infiles, outdir, nrows) {
     log_info("Plotting...")
     p <- ggplot(freq, aes(x = Cycle, y = Pct, colour = Base)) +
       geom_line() +
+      scale_x_continuous(minor_breaks = seq(1, max(freq$Cycle), 1)) +
+      theme_classic() +
+      theme(panel.grid.minor = element_line(colour = "grey", linewidth = 0.1))
       ggtitle(infile_friendly)
-    
-    #q <- ggplotly(p)
     
     # Export
     outfile <- paste0(outdir, "/", infile_friendly, ".pdf")
@@ -92,9 +94,11 @@ ntByCycle <- function(infiles, outdir, nrows) {
     dev.off()
     log_info("Exported static plot to ", outfile, ".")
     
-    #outfile2 <- paste0(outdir, "/", infile_friendly, ".html")
-    #htmlwidgets::saveWidget(config(q, showLink = T), outfile2)
-    #log_info("Exported interactive plot to ", outfile2, ".")
+    try({
+      outfile2 <- paste0(outdir, "/", infile_friendly, ".html")
+      htmlwidgets::saveWidget(config(ggplotly(p), showLink = T), outfile2)
+      log_info("Exported interactive plot to ", outfile2, ".")
+    }, silent = T)
     
   }
   
@@ -110,7 +114,11 @@ if (!interactive()) {                                                           
     make_option(opt_str = c("-o", "--out"), type = "character", default = ".",
                 help = "Optional. Path to directory to output the result. Defaults to the current working directory.", metavar = "character"),
     make_option(opt_str = c("-n", "--nrows"), type = "numeric", default = Inf,
-                help = "Optional. How many rows to read from the top of the FASTQ file(s). Default Inf.", metavar = "numeric")
+                help = "Optional. How many rows to read from the top of the FASTQ file(s). Default Inf.", metavar = "numeric"),
+    make_option(opt_str = c("-s", "--start"), type = "numeric", default = Inf,
+                help = "Optional. Cycle number to start the trace. Default 1.", metavar = "numeric"),
+    make_option(opt_str = c("-e", "--end"), type = "numeric", default = Inf,
+                help = "Optional. Cycle number to end the trace. Default Inf.", metavar = "numeric")
   )
   
   opt_parser = OptionParser(option_list = option_list)
@@ -194,9 +202,11 @@ if (length(infiles) > 1) {
 }
 
 nrows <- opt$nrows
+start <- opt$start
+end <- opt$end
 
 #### Execution ####
 
-ntByCycle(infiles, outdir, nrows)
+ntByCycle(infiles, outdir, nrows, start, end)
 end_time <- proc.time()
 log_info("ntByCycle process completed in ", (end_time - start_time)[[3]], " seconds.")
