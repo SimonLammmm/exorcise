@@ -116,7 +116,7 @@ if (!interactive()) {                                                           
                 help = "Optional. Path to directory to output the result. Defaults to the current working directory.", metavar = "character"),
     make_option(opt_str = c("-n", "--nrows"), type = "numeric", default = Inf,
                 help = "Optional. How many rows to read from the top of the FASTQ file(s). Default Inf.", metavar = "numeric"),
-    make_option(opt_str = c("-s", "--start"), type = "numeric", default = Inf,
+    make_option(opt_str = c("-s", "--start"), type = "numeric", default = 1,
                 help = "Optional. Cycle number to start the trace. Default 1.", metavar = "numeric"),
     make_option(opt_str = c("-e", "--end"), type = "numeric", default = Inf,
                 help = "Optional. Cycle number to end the trace. Default Inf.", metavar = "numeric")
