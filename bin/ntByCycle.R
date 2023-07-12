@@ -84,7 +84,8 @@ ntByCycle <- function(infiles, outdir, nrows, start, end) {
       geom_line() +
       scale_x_continuous(minor_breaks = seq(1, max(freq$Cycle), 1)) +
       theme_classic() +
-      theme(panel.grid.minor = element_line(colour = "grey", linewidth = 0.1))
+      theme(panel.grid.major = element_line(colour = "black", linewidth = 0.1),
+        panel.grid.minor = element_line(colour = "grey", linewidth = 0.1))
       ggtitle(infile_friendly)
     
     # Export
