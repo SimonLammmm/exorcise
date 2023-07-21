@@ -14,10 +14,11 @@
 
 #### VERSION HISTORY ####
 # version       datestamp             description
-# 0.9           2022-12-09T12-28-16   evaluation of full release
+# 0.9           2023-07-20T17-30-00   evaluation of full release
+# 0.9.1         2023-07-21T14-37-00   improved checkpointing
 
 
-ver <- 0.9
+ver <- 0.91
 
 #### INIT ####
 suppressPackageStartupMessages({
@@ -31,6 +32,8 @@ suppressPackageStartupMessages({
   library(R.utils)
   library(GenomicRanges)
 })
+
+options(scipen=999)
 
 
 #### FUNCTIONS ####
@@ -66,6 +69,8 @@ reannotateLib <- function(opt) {
                   file_sgRNAs = paste0(opt$outdir, "/exorcise.1-seq.fa"),
                   file_psl = paste0(opt$outdir, "/exorcise.2-",  sub(".+/(.+?)$", "\\1", opt$genome), "_BLAT.psl"),
                   file_genomic_ranges = paste0(opt$outdir, "/exorcise.3-", sub(".+/(.+?)$", "\\1", opt$genome), "_genomicRanges.tsv"),
+                  file_genomic_seqSpecs = paste0(opt$outdir, "/exorcise.3-", sub(".+/(.+?)$", "\\1", opt$genome), "_genomicSeqSpecs.tsv"),
+                  file_genomic_seqs = paste0(opt$outdir, "/exorcise.3-", sub(".+/(.+?)$", "\\1", opt$genome), "_genomicSeqs.fa"),
                   file_genomic_ranges_matched = paste0(opt$outdir, "/exorcise.4-", sub(".+/(.+?)$", "\\1", opt$exome), "_exonHits.tsv"),
                   file_genomic_ranges_distances = paste0(opt$outdir, "/exorcise.5-", sub(".+/(.+?)$", "\\1", opt$exome), "_exonDist.tsv"),
                   file_exorcise_master_out = paste0(opt$outdir, "/exorcise.tsv"))
@@ -76,11 +81,11 @@ reannotateLib <- function(opt) {
     runGrtem(blats)
     
      # generate mapping
-      genome_hits <- fread(blats$file_genomic_ranges, colClasses = "character") %>% transmute(exo_id, exo_target = paste0(seqnames, ":", guideBegin, "-", guideFinal, "_", strand), exo_cut = paste0(seqnames, ":", start))
-      exome_hits <- fread(blats$file_genomic_ranges_matched, colClasses = "character") %>% transmute(exo_id, exo_symbol)
-      all_mappings <- left_join(genome_hits, exome_hits, by = c("exo_id")) %>% unique()
+      genome_hits <- fread(blats$file_genomic_ranges, colClasses = "character") %>% transmute(exo_seq, exo_target, exo_cut)
+      exome_hits <- fread(blats$file_genomic_ranges_matched, colClasses = "character") %>% transmute(exo_seq, exo_cut, exo_symbol) %>% unique()
+      all_mappings <- left_join(genome_hits, exome_hits, by = c("exo_seq", "exo_cut")) %>% unique()
     
-    premaster <- left_join(authors, all_mappings, by = "exo_id")
+    premaster <- left_join(authors, all_mappings, by = "exo_seq")
     master <- exorcisemaster(premaster, blats, opt)
     
   } else {
@@ -170,7 +175,31 @@ runPtgr <- function(blats) {
                                start = case_when(strand == "+" ~ guideFinal - (3 + nchar(opt$pam)), # -3 to -4 upstream from PAM is the cut site
                                                  strand == "-" ~ guideBegin + (3 + nchar(opt$pam))),
                                end = case_when(strand == "+" ~ guideFinal - (3 + nchar(opt$pam)),
-                                               strand == "-" ~ guideBegin + (3 + nchar(opt$pam))))
+                                               strand == "-" ~ guideBegin + (3 + nchar(opt$pam))),
+                               seqSpec = case_when(strand == "+" ~ paste0(seqnames, ":", guideBegin, "-", guideFinal - nchar(opt$pam)),
+                                                   strand == "-" ~ paste0(seqnames, ":", guideBegin + nchar(opt$pam), "-", (guideFinal))),
+                               exo_target = paste0(seqnames, ":", guideBegin, "-", guideFinal, "_", strand),
+                               exo_cut = paste0(seqnames, ":", start))
+      
+      fwrite(as.list(out$seqSpec), blats$file_genomic_seqSpecs, sep = "\n", col.names = F)
+      system(paste0("twoBitToFa ", blats$file_genome, " -seqList=", blats$file_genomic_seqSpecs, " ", blats$file_genomic_seqs))
+      
+      seq <- fread(blats$file_genomic_seqs, header = F)
+      seq <- tibble(seqSpec = seq %>% filter(grepl("^>", V1)) %>% mutate(V1 = sub("^>", "", V1)) %>% unlist(),
+                    exo_seq = seq %>% filter(!grepl("^>", V1)) %>% unlist())
+      
+      revcom <- function(x) {
+        r <- foreach(i = x, .combine = "c") %do% {
+          y = chartr("ACGT", "TGCA", toupper(i))
+          y = intToUtf8(rev(utf8ToInt(y)))
+        }
+        return(r)
+      }
+      
+      out <- out %>% mutate(exo_seq = seq$exo_seq,
+                            exo_seq = case_when(strand == "+" ~ exo_seq,
+                                                strand == "-" ~ revcom(exo_seq)))
+      
       dir.create(dirname(outfile), recursive = T, showWarnings = F)							
       fwrite(out, outfile, sep = "\t") 
       log_info("Wrote genomic hits file to ", outfile)
@@ -199,7 +228,7 @@ inferHitsCols <- function(file_genomic_ranges) {
   hits_cols$start <- grep("start", hits_headers)
   hits_cols$end <- grep("end", hits_headers)
   hits_cols$strand <- grep("str", hits_headers)
-  hits_cols$id <- grep("^exo_id$", hits_headers)
+  hits_cols$exo_seq <- grep("^exo_seq$", hits_headers)
   return(hits_cols)
 }
 
@@ -243,17 +272,17 @@ import_hits <- function(file_genomic_ranges, hits_cols) {
   seqnames <- hits[[as.numeric(hits_cols$chr)]]
   start <- hits[[as.numeric(hits_cols$start)]]
   end <- hits[[as.numeric(hits_cols$end)]]
-  exo_id = hits[[as.numeric(hits_cols$id)]]
+  exo_seq = hits[[as.numeric(hits_cols$exo_seq)]]
   if (hits_cols$strand == "*") {                    # use * if in strandless mode
     strand <- rep("*", nrow(hits))
   } else {
     strand <- hits[[as.numeric(hits_cols$strand)]]
   }
   
-  hits <- tibble(seqnames = seqnames, start = start, end = end, strand = strand, exo_id = exo_id) %>%
+  hits <- tibble(seqnames = seqnames, start = start, end = end, strand = strand, exo_seq = exo_seq) %>%
     filter(!is.na(seqnames) & !is.na(start) & !is.na(end) & end >= start) %>%
     mutate(ranges = paste(start, end, sep = "-"))
-  hits <- GRanges(seqnames = hits$seqnames, ranges = hits$ranges, strand = hits$strand, exo_id = as.character(hits$exo_id))
+  hits <- GRanges(seqnames = hits$seqnames, ranges = hits$ranges, strand = hits$strand, exo_seq = as.character(hits$exo_seq))
   return(hits)
 }
 
@@ -272,8 +301,10 @@ runGrtem <- function(blats) {
       exon_hitsRanges <- suppressWarnings(findOverlapPairs(hits, exons))        # Make a gRanges Pairs object indicating the genomic ranges of pairs of gRanges that overlap between the first (hits) and second (exome)
       sgrna_hits <- GRanges(exon_hitsRanges@first,                              # Make a gRanges object which contains the genomic ranges of the hits and the Symbols from the exome
                             exo_symbol = exons$exo_symbol[exon_hits@to],
-                            exo_id = as.character(hits$exo_id[exon_hits@from]))
-      mapping <- as_tibble(sgrna_hits) %>% unique()
+                            exo_seq = as.character(hits$exo_seq[exon_hits@from]))
+      mapping <- as_tibble(sgrna_hits) %>%
+        mutate(exo_cut = paste0(seqnames, ":", start)) %>%
+        unique()
       mapping$assembly <- blats$file_genome
       mapping$exome <- blats$file_exons
       
@@ -281,9 +312,11 @@ runGrtem <- function(blats) {
       sgrna_distances <- GRanges(hits[distances@from],                          # Make a gRanges object annotated with the gene of the nearest exon and the distance to that exon
                                  nearestGene = exons$exo_symbol[distances@to],
                                  distance = distances@elementMetadata$distance,
-                                 exo_id = as.character(hits$exo_id[distances@from]))
+                                 exo_seq = as.character(hits$exo_seq[distances@from]))
       
-      final_distances <- as_tibble(sgrna_distances) %>% unique()
+      final_distances <- as_tibble(sgrna_distances) %>% 
+        mutate(exo_cut = paste0(seqnames, ":", start)) %>%
+        unique()
       final_distances$assembly <- blats$file_genome
       final_distances$exome <- blats$file_exons
       
@@ -736,18 +769,18 @@ fixOpts <- function(opt) {
 # Test vector
 if (interactive()) {
   opt <- list()
-  opt$infile <- "/Users/lam02/Library/CloudStorage/OneDrive-UniversityofCambridge/Projects/operation/crave/runs/Almu/NVS097/orig/cts/NVS097.counts.tsv.gz"
-  opt$outdir <- "exorcise"
-  opt$seq <- "1"
-  opt$pam <- NULL
-  opt$genome <- NULL
-  opt$exome <- NULL
-  opt$priorities <- NULL
+  opt$infile <- ""
+  opt$outdir <- ""
+  opt$seq <- ""
+  opt$pam <- ""
+  opt$genome <- ""
+  opt$exome <- ""
+  opt$priorities <- ""
   opt$id <- NULL
-  opt$harm <- NULL
-  opt$control <- NULL
+  opt$harm <- ""
+  opt$control <- ""
   opt$control_type <- NULL
-  opt$library <- "/Users/lam02/Downloads/exorcise/exorcisedsada.tsv"
+  opt$library <- ""
 }
 
 ## Execution
