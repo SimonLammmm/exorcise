@@ -17,11 +17,12 @@
 # 0.9           2023-07-20T17-30-00   evaluation of full release
 # 0.9.1         2023-07-21T14-37-00   improved checkpointing
 # 0.9.2         2023-07-21T17-00-00   various fixes
+# 0.9.3         2023-07-21T17-10-00   various fixes
 
-ver <- "0.9.2"
+ver <- "0.9.3"
 
 #### INIT ####
-suppressPackageStartupMessages({
+suppressWarnings(suppressMessages({
   library(optparse)
   library(dplyr)
   library(data.table)
@@ -31,7 +32,7 @@ suppressPackageStartupMessages({
   library(logger)
   library(R.utils)
   library(GenomicRanges)
-})
+}))
 
 options(scipen=999)
 
