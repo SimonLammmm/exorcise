@@ -16,9 +16,9 @@
 # version       datestamp             description
 # 0.9           2023-07-20T17-30-00   evaluation of full release
 # 0.9.1         2023-07-21T14-37-00   improved checkpointing
+# 0.9.2         2023-07-21T17-00-00   various fixes
 
-
-ver <- 0.91
+ver <- "0.9.2"
 
 #### INIT ####
 suppressPackageStartupMessages({
@@ -54,7 +54,7 @@ commasplit <- function(x) unlist(strsplit(x, ","))
 file.not.exist.or.zero <- function(x) !file.exists(Sys.glob(paste0(x, "*"))[1]) | file.exists(Sys.glob(paste0(x, "*"))[1]) & file.size(Sys.glob(paste0(x, "*"))[1]) == 0
 
 # fread with hanging glob
-# fread <- function(x, ...) data.table::fread(file = Sys.glob(paste0(x, "*"))[1], ...)
+fread <- function(x, ...) data.table::fread(file = Sys.glob(paste0(x, "*"))[1], ...)
 
 
 #### MAIN FUNCTION ####
@@ -102,9 +102,9 @@ importAuthorsLib <- function(opt) {
   authors <- fread(opt$infile)
   
   if(!is.null(opt$id)) {
-    authors <- authors %>% mutate(exo_id = paste0("exorcise_", 1:n(), "_", .[[opt$id]], "_", .[[opt$harm]]))
+    authors <- authors %>% mutate(exo_id = paste0("exorcise_", 1:n(), "_", .[[opt$id]], "_", .[[opt$seq]]))
   } else {
-    authors <- authors %>% mutate(exo_id = paste0("exorcise_", 1:n(), "_", .[[opt$harm]]))
+    authors <- authors %>% mutate(exo_id = paste0("exorcise_", 1:n(), "_", toupper(.[[opt$seq]])))
   }
   
   authors <- authors %>%                               # read authors' file
@@ -197,7 +197,7 @@ runPtgr <- function(blats) {
       }
       
       out <- out %>% mutate(exo_seq = seq$exo_seq,
-                            exo_seq = case_when(strand == "+" ~ exo_seq,
+                            exo_seq = case_when(strand == "+" ~ toupper(exo_seq),
                                                 strand == "-" ~ revcom(exo_seq)))
       
       dir.create(dirname(outfile), recursive = T, showWarnings = F)							
@@ -363,12 +363,16 @@ exorcisemaster <- function(premaster, blats, opt) {
   if ("exo_orig" %in% names(master)) {
     simple <- exorciseinferTargets(master, blats, opt)
     master <- left_join(master, simple, by = "exo_orig") %>%
-      mutate(exo_harm = case_when(is.na(exo_harm) ~ exo_symbol,
+      mutate(exo_harm = case_when(is.na(exo_harm) ~ exo_symbol, # Accept harmonised symbol if found
+                                  T ~ exo_harm),                # Accept exorcised symbol if no harmonised symbol
+             exo_harm = case_when(grepl(paste0(paste0("(^", c("X", opt$control_type), "\\d+$)"), collapse = "|"), exo_symbol) ~ exo_symbol, # For control guides, accept exorcised symbol without harmonisation
                                   T ~ exo_harm)) %>%
       relocate(exo_id, exo_seq, exo_symbol, exo_harm, exo_orig, exo_target, exo_cut)
   } else {
     master <- master %>% relocate(exo_id, exo_seq, exo_symbol, exo_target, exo_cut)
   }
+  
+  master <- master %>% mutate(exo_id = paste0("exorcise_", exo_seq, "_", exo_target))
   
   dirwrite(master, outfile_m_tsv, sep = "\t")
   log_info("Wrote master library to ", outfile_m_tsv)
@@ -393,9 +397,9 @@ exorciseinferTargets <- function(master, blats, opt) {
       left_join(annot, by = c("exo_symbol" = "Approved_symbol"))                  # Join the multi-mapped original symbols to annotations for their mapping target
     simple_dup$Locus_group[which(is.na(simple_dup$Locus_group))] <- "other"
     
-    simple_dup <- simple_dup %>% filter(!grepl(paste0(paste0("^", c("X", opt$control_type), "\\d+$"), collapse = "|"), exo_symbol)) # Remove controls and unmapped guides when considering intended target
-    
-    dup <- unique(simple_dup$exo_orig)
+    simple_dup2 <- simple_dup %>% filter(!grepl(paste0(paste0("(^", c("X", opt$control_type), "\\d+$)"), collapse = "|"), exo_symbol)) # Remove controls and unmapped guides when considering intended target
+
+    dup <- unique(simple_dup2$exo_orig)
     
     # Fix multi-mapped original symbols
     j <- 1
@@ -403,13 +407,10 @@ exorciseinferTargets <- function(master, blats, opt) {
     log_info("Inferring intended targets... ")
     
     simple_fixed <- data.table(exo_harm = rep("", tot),
-                               exo_orig = rep("", tot),
-                               Locus_group = rep("", tot),
-                               consensus = rep("", tot),
-                               fit_rank = rep("", tot))        # Initialise a tibble to contain fixed, singly-mapped original symbols
+                               exo_orig = rep("", tot))        # Initialise a tibble to contain fixed, singly-mapped original symbols
     
     for (s in dup) {  
-      q <- simple_dup %>% filter(exo_orig == s)
+      q <- simple_dup2 %>% filter(exo_orig == s)
       cons <- q %>%                                                                         # Determine the candidates that appeared the most often
         group_by(exo_symbol) %>%
         summarise(consensus = n()) %>%
@@ -421,9 +422,6 @@ exorciseinferTargets <- function(master, blats, opt) {
       accept <- q %>% filter(fit_rank == min(fit_rank)) %>% arrange(exo_symbol) %>% head(1)     # If the top rank is still tied, accept the first match alphabetically
       set(simple_fixed, as.integer(j), "exo_harm", accept$exo_symbol[1])
       set(simple_fixed, as.integer(j), "exo_orig", accept$exo_orig[1])
-      set(simple_fixed, as.integer(j), "Locus_group", accept$Locus_group[1])
-      set(simple_fixed, as.integer(j), "consensus", accept$consensus[1])
-      set(simple_fixed, as.integer(j), "fit_rank", accept$fit_rank[1])
       j <- j + 1
       if(j %% 1000 == 0) {
         log_info("Inferring intended targets... ", j, " out of ", tot, " done...")
@@ -432,7 +430,7 @@ exorciseinferTargets <- function(master, blats, opt) {
     log_info("Inferring intended targets... ", tot, " out of ", tot, " done.")
     
     # Combine
-      simple <- simple_fixed %>% dplyr::select(-Locus_group, -fit_rank, -consensus) %>% unique()
+      simple <- simple_fixed %>% unique()
       
     return (simple)
 
@@ -539,32 +537,6 @@ fixOpts <- function(opt) {
     errors <- c(errors, paste0("Error: --seq not specified."))
   }
   
-  # check pam
-  if(length(opt$pam) > 0) {
-    if(length(opt$pam) > 1) {
-      opt$pam <- opt$pam[1]
-      warnings <- c(warnings, paste0("Warning: --pam received more than one argument. Using first value only: ", opt$pam, "."))
-    }
-    if(grepl("[^ACTGNactgn]", opt$pam)) {
-      errors <- c(errors, paste0("Error: --pam ", opt$pam," contains non-nucleotide letters. Only [ACTGN] are accepted."))
-    }
-  } else {
-    warnings <- c(warnings, paste0("Warning: --pam not specified. Not appending any PAM."))
-  }
-  
-  # check mode
-  if(length(opt$mode) > 0) {
-    if(length(opt$mode) > 1) {
-      opt$mode <- opt$mode[1]
-      warnings <- c(warnings, paste0("Warning: --mode received more than one argument. Using first value only: ", opt$mode, "."))
-    }
-    opt$mode <- toupper(opt$mode)
-    if(!(opt$mode %in% c("KO", "A", "I"))) {
-      warnings <- c(warnings, paste0("Warning: --mode received an invalid value: ", opt$mode, ". Falling back to KO."))
-      opt$mode <- "KO"
-    }
-  }
-  
   # check library
   if(length(opt$library) > 0) {
     if(length(opt$library) > 1) {
@@ -595,6 +567,37 @@ fixOpts <- function(opt) {
   } else {
     opt$adhoc <- T
     warnings <- c(warnings, paste0("Info: --library not specified. Using ad-hoc mode."))
+  }
+  
+  # check pam
+  if(length(opt$pam) > 0) {
+    if(opt$adhoc) {
+      if(length(opt$pam) > 1) {
+        opt$pam <- opt$pam[1]
+        warnings <- c(warnings, paste0("Warning: --pam received more than one argument. Using first value only: ", opt$pam, "."))
+      }
+      if(grepl("[^ACTGNactgn]", opt$pam)) {
+        errors <- c(errors, paste0("Error: --pam ", opt$pam," contains non-nucleotide letters. Only [ACTGN] are accepted."))
+      }
+    } else {
+      warnings <- c(warnings, paste0("Warning: --pam specified outside of ad-hoc mode. Ignoring"))
+    }
+  } else if(opt$adhoc) {
+    opt$pam <- ""
+    warnings <- c(warnings, paste0("Warning: --pam not specified. Not appending any PAM."))
+  }
+  
+  # check mode
+  if(length(opt$mode) > 0) {
+    if(length(opt$mode) > 1) {
+      opt$mode <- opt$mode[1]
+      warnings <- c(warnings, paste0("Warning: --mode received more than one argument. Using first value only: ", opt$mode, "."))
+    }
+    opt$mode <- toupper(opt$mode)
+    if(!(opt$mode %in% c("KO", "A", "I"))) {
+      warnings <- c(warnings, paste0("Warning: --mode received an invalid value: ", opt$mode, ". Falling back to KO."))
+      opt$mode <- "KO"
+    }
   }
   
   # check genome
@@ -683,54 +686,70 @@ fixOpts <- function(opt) {
   
   # check id
   if(length(opt$id) > 0) {
-    if(length(opt$id) > 1) {
-      opt$id <- opt$id[1]
-      warnings <- c(warnings, paste0("Warning: --id received more than one argument. Using first value only: ", opt$id, "."))
-    }
-    if(!grepl("^\\d+$", opt$id)) {
-      errors <- c(errors, paste0("Error: --id must be an integer, got ", opt$id, "."))
+    if(opt$adhoc) {
+      if(length(opt$id) > 1) {
+        opt$id <- opt$id[1]
+        warnings <- c(warnings, paste0("Warning: --id received more than one argument. Using first value only: ", opt$id, "."))
+      }
+      if(!grepl("^\\d+$", opt$id)) {
+        errors <- c(errors, paste0("Error: --id must be an integer, got ", opt$id, "."))
+      } else {
+        opt$id <- as.numeric(opt$id)
+      }
     } else {
-      opt$id <- as.numeric(opt$id)
+      warnings <- c(warnings, paste0("Warning: --id specified outside of ad-hoc mode. Ignoring."))
     }
   }
   
   # check harm
   if(length(opt$harm) > 0) {
-    if(length(opt$harm) > 1) {
-      opt$harm <- opt$harm[1]
-      warnings <- c(warnings, paste0("Warning: --harm received more than one argument. Using first value only: ", opt$harm, "."))
-    }
-    if(!grepl("^\\d+$", opt$harm)) {
-      errors <- c(errors, paste0("Error: --harm must be an integer, got ", opt$harm, "."))
+    if(opt$adhoc) {
+      if(length(opt$harm) > 1) {
+        opt$harm <- opt$harm[1]
+        warnings <- c(warnings, paste0("Warning: --harm received more than one argument. Using first value only: ", opt$harm, "."))
+      }
+      if(!grepl("^\\d+$", opt$harm)) {
+        errors <- c(errors, paste0("Error: --harm must be an integer, got ", opt$harm, "."))
+      } else {
+        opt$harm <- as.numeric(opt$harm)
+      }
     } else {
-      opt$harm <- as.numeric(opt$harm)
+      warnings <- c(warnings, paste0("Warning: --harm specified outside of ad-hoc mode. Ignoring."))
     }
   }
   
   # check control
   if(length(opt$control) > 0) {
-    if(length(opt$harm) == 0) {
-      opt$control <- NULL
-      warnings <- c(warnings, paste0("Warning: --control passed without --harm. Ignoring."))
+    if(opt$adhoc) {
+      if(length(opt$harm) == 0) {
+        opt$control <- NULL
+        warnings <- c(warnings, paste0("Warning: --control passed without --harm. Ignoring."))
+      }
+    } else {
+      warnings <- c(warnings, paste0("Warning: --control specified outside of ad-hoc mode. Ignoring."))
     }
   }
   
   # check control_type
   if(length(opt$control_type) > 0) {
-    if(length(opt$control) == 0) {
-      opt$control_type <- NULL
-      warnings <- c(warnings, paste0("Warning: --control_types passed without --control. Ignoring."))
-    } else if(length(opt$control) == 1) {
-      if(length(opt$control_type) > 1) {
-        opt$control_type <- opt$control_type[1]
-        warnings <- c(warnings, paste0("Warning: --control_type received more than one argument. Using first value only: ", opt$control_type, "."))
+    if(opt$adhoc) {
+      if(length(opt$control) == 0) {
+        opt$control_type <- NULL
+        warnings <- c(warnings, paste0("Warning: --control_types passed without --control. Ignoring."))
+      } else if(length(opt$control) == 1) {
+        if(length(opt$control_type) > 1) {
+          opt$control_type <- opt$control_type[1]
+          warnings <- c(warnings, paste0("Warning: --control_type received more than one argument. Using first value only: ", opt$control_type, "."))
+        }
+      } else if(length(opt$control) > 1) {
+        if(length(opt$control_type) == 1) {
+          opt$control_type <- rep(opt$control_type, length(opt$control))
+        } else if(length(control_type) != length(control)) {
+          errors <- c(errors, paste0("Error: --control and --control_type lengths are not equal."))
+        }
       }
-    } else if(length(opt$control) > 1) {
-      if(length(opt$control_type) == 1) {
-        opt$control_type <- rep(opt$control_type, length(opt$control))
-      } else if(length(control_type) != length(control)) {
-        errors <- c(errors, paste0("Error: --control and --control_type lengths are not equal."))
-      }
+    } else {
+      warnings <- c(warnings, paste0("Warning: --control_type specified outside of ad-hoc mode. Ignoring."))
     }
   } else if(length(opt$control) > 0) {
     opt$control_type <- "Non-targeting"
@@ -769,17 +788,17 @@ fixOpts <- function(opt) {
 # Test vector
 if (interactive()) {
   opt <- list()
-  opt$infile <- ""
-  opt$outdir <- ""
-  opt$seq <- ""
-  opt$pam <- ""
-  opt$genome <- ""
-  opt$exome <- ""
-  opt$priorities <- ""
-  opt$id <- NULL
-  opt$harm <- ""
-  opt$control <- ""
-  opt$control_type <- NULL
+  opt$infile <- "/Users/lam02/Downloads/Test1/test.tsv"
+  opt$outdir <- "/Users/lam02/Downloads/Test1/"
+  opt$seq <- "2"
+  opt$pam <- NULL
+  opt$genome <- "/Users/lam02/Library/CloudStorage/OneDrive-UniversityofCambridge/Projects/dev/exorcise/data/hg38.2020-09-22.2bit"
+  opt$exome <- "/Users/lam02/Library/CloudStorage/OneDrive-UniversityofCambridge/Projects/dev/exorcise/data/hg38.refseq.exons.tsv"
+  opt$priorities <- "/Users/lam02/Library/CloudStorage/OneDrive-UniversityofCambridge/Projects/dev/exorcise/data/symbol_ids_table.csv"
+  opt$id <- "1"
+  opt$harm <- "3"
+  opt$control <- "control"
+  opt$control_type <- "MyControl"
   opt$library <- ""
 }
 
