@@ -1,69 +1,82 @@
 # exorcise
-EXOme-guided Reannotation of nuCleotIde SEquences
-or exome-guided reannotation of CRISPR sequences, as it was originally designed
+Exome-guided reannotation of nucleotide sequences (exorcise) is available at:
+https://github.com/SimonLammmm/exorcise/
 
-This software was previously codenamed crispieR (CRISPR Identification Enhancement in R) and filenames and references still reflect this old name.
+This document describes the basic usage and syntax of exorcise.
 
-## Description
-exorcise accepts a vector of nucleotide sequences, aligns them to a supplied reference genome, and annotates them according to a supplied reference feature set based on co-ordinates.
+Contents:
+•	Introduction
+•	Syntax
+•	Modes
+•	Outputs
 
-## Background
-Annotations to standard reference assemblies such as GRCh38 and feature sets such as RefSeq are not universally applicable to all use cases. Experimental cell lines are highly likely to differ from references in at least a small but detectable way and these discrepancies influence, for example, targeting efficiency of CRISPR-Cas9 or RNA interference guide RNAs. This can be overcome by design of guide RNAs to arbitrary genomes and feature sets that are specific to the target experimental cell line.
 
-exorcise is a software suite that verifies the presence or absence of nucleotide sequences in a supplied reference genome and provides annotations according to a supplied reference feature set according to a consistent genomic co-ordinate system. This software can be used to inform whether pre-constructed libraries of nucleotides exist in a supplied genome/exome and can reannotate sequencing counts data to the correct targets for the supplied genome/exome.
+## Introduction
 
-## Algorithm
-exorcise requires a vector of short nucleotide sequences as an input as well as a genome assembly in `.2bit` format and a UCSC-style feature set file. Examples of these files can be found in `tutorial/tutorial/data`. Nucleotide sequences are perfectly aligned to the genome using BLAT, genomic co-ordinates of the attention site (e.g., Cas9 cut site) are determined, and features occurring at the attention site are obtained from the feature set file. The output is a file containing the nucleotide sequences along with the genomic co-ordinates of the perfect alignments, genomic co-ordinates of the attention site, and features obtained at that site. Additionally, Ensembl, HGNC, and NCBI gene IDs are attached using `biomaRt`.
+Sequences are often prescribed with annotations based on a certain genome assembly. It is not always appropriate to accept these annotations for all use cases of those sequences. For instance, a library of sgRNA sequences for CRISPR-Cas9 may be designed based on GRCh37 and sgRNAs annotated as "targeting" a certain gene or "non-targeting". Sequence search of those sgRNAs in GRCh38 might reveal discrepancies because of updates to the assembly; further, cell lines which do not perfectly reflect GRCh37 will show differential reactivity to the CRISPR guides as compared their annotations. Exorcise reannotates sequences based on their presence or absence in a user-supplied genome and exome. If the supplied genome and exome reflect the subject under consideration, then the user can be confident as to the presence or absence of sequences in the subject and the validity of the annotations.
 
-A vector of original features can be given as an optional input. If provided, then exorcise additionally computes a one-to-one mapping between original features and reannotated features. For each original feature, exorcise compiles a list of reannotated features across all nucleotide sequences pre-annotated with that original feature. One reannotated feature is selected according to mode; if multimodel, then a feature priority list is used (see example in `tutorial/tutorial/data/symbol_ids_table.csv.gz` and `tutorial/tutorial/data/MRK_List2.rpt.gz` for feature priority lists for RefSeq gene symbols in GRCh38 and GRCm39, respectively). All nucleotide sequences are reannotated with the one selected feature.
+Exorcise aligns sequences to the genome and implements set mathematics operations between alignment targets and exon coordinates to transfer annotations to the perfect alignments. It is written entirely in R and relies on BLAT for perfect sequence alignment.
 
-An optional specification of control (e.g., non-targeting) nucleotide sequences can be given as an input to exorcise. exorcise will accept these sequences into its algorithm as normal, but these sequences will additionally be analysed to produce a report detailing whether they mapped to any genomic region with features.
+Exorcise calculates sequence-level reannotations whereby each sequence is considered in turn. If provided a grouping variable (for example, original annotations), exorcise also calculates group-level reannotations where a consensus sequence-level reannotation is determined for each group and applied to all sequences in the group. We refer to this behaviour as harmonisation.
 
-## Features
-* CRISPRko sequence support, attention site at the Cas9 cut site between -4 and -3 nucleotides protospacer-adjacent motif (PAM)-distal from the PAM.
-* Automatic attachment of Ensembl, HGNC, and NCBI gene IDs for human and mouse genomes.
-* Support for gzipped file inputs (except for the `.2bit` genome file).
-* Retains intermediate files to use as a checkpoint. These files will be accessed and won't be created again in the case that the analysis was stopped and needs to be run again.
-* Reannotation of sequences using a pre-generated exorcise library.
-* Reannotation of features using a pre-generated exorcise feature mapping file.
-* Ad-hoc mode, calling the main exorcise algorithm where the input file contains additional data (e.g., counts data) in addition to the vector of nucleotide sequences.
-* Verbose logging.
+Exorcise is developed and maintained by Dr Simon Lam and is available at https://github.com/SimonLammmm/exorcise/.
 
-## Coming soon
-* Support for CRISPRa and CRISPRi mode with attention sites based on experimentally determined target sites.
-* Support for direct mode where the attention site matches the alignment coordinates.
-* Support for arbitrary mode where the attention site is specified by the user.
-* Option to disable joining Ensembl, HGNC, and NCBI annotations.
-* Checking to see if intermediate files are out of date and need replacing.
-* Option to remove intermediate files after a successful run.
+## Syntax
 
-## Usage
-The main script, `bin/crispieR-lib.R`, performs the reannotation algorithm and is called by the peripheral scripts.
+Exorcise takes mandatory and optional arguments.
 
-Options include:
-* `-i` input file containing a vector of nucleotide sequences and optionally a vector of pre-annotated features. This file should be a plaintext `.tsv`, `.csv`, or `.txt` file, gzipped plaintext file, or `.xls`, or `.xlsx` file.
-* `-k` input file specification: can be "tsv", "csv", "txt", "xls", or "xlsx". exorcise will infer the filetype if this is missing. (Optional)
-* `-g` integer specifying the column number of the vector of nucleotide sequences in the input file.
-* `-n` integer specifying the column number of the vector of pre-annotated features in the input file. (Optional)
-* `-a`, either "Human" or "Mouse". This affects where to look to attach Ensembl, HGNC, and NCBI gene IDs.
-* `-p` prefix to use for all output files.
-* `-c` comma-separated list of control regexes. Any features matching these regexes are detected as control sequences.
-* `-d` comma-separated list of control types. Control sequences identified by `-c` will be reannotated to these types.
-* `-v` path to the genome in `.2bit` format.
-* `-w` path to the reference feature set. Accepts gzipped files. UCSC format. See example in `tutorial/tutorial/data`
-* `-y` path to the feature priority set. Accepts gzipped files. See example in `tutorial/tutorial/data`
-* `-o` path where all output files will be written.
+|     Long flag (short flag)    |     Mandatory?                              |     Value         |     Description                                                                                                                                                                                                             |
+|-------------------------------|---------------------------------------------|-------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+|     --infile   (-i)           |     Yes                                     |     File          |     File containing   sequences to be exorcised. Arbitrary columns will be returned in the output   file.                                                                                                                   |
+|     --outdir   (-o)           |     Yes                                     |     Directory     |     Working directory to   place intermediate files and the output file exorcise.tsv.                                                                                                                                       |
+|     --seq   (-g)              |     Yes                                     |     Number        |     Column number in the infile   that corresponds to sequences to be exorcised. 1-based integer, must not be   greater than the number of columns in the infile.                                                           |
+|     --pam   (-z)              |     No                                      |     Nucleotide    |     Sequence to be appended   to the 5' end of each sequence for BLAT purposes only. Must be in the   single-letter nucleotide alphabet (ACGTN).                                                                            |
+|     --library   (-l)          |     Yes, if -v   -w   -y   not specified    |     File          |     Exorcised library to be   used for the re-annotation. If this is not specified, then genome,   exome,   and priorities   must be specified. Must be an exorcise output file.                                            |
+|     --genome   (-v)           |     Yes, if -l   not specified              |     File          |     Genome in 2bit format. Ignored   if library   is specified.                                                                                                                                                             |
+|     --exome   (-w)            |     Yes, if -l   not specified              |     File          |     Exome from UCSC Table   Browser. Ignored if library is specified.                                                                                                                                                       |
+|     --priorities   (-y)       |     Yes, if -l   not specified              |     File          |     Feature priorities   list. Ignored if library is specified.                                                                                                                                                             |
+|     --harm   (-n)             |     No                                      |     Number        |     Column number in the infile   containing groups to perform group-level exorcise (harmonisation). 1-based   integer, must not be greater than the number of columns in the infile.   Ignored if library is specified.    |
+|     --control   (-c)          |     No                                      |     String        |     Comma-separated list of   strings to treat as control sequences. R regex allowed. Ignored if harm   is not specified. Ignored if library is specified.                                                                  |
+|     --control_type   (-d)     |     No                                      |     String        |     Comma-separated list of   strings of the same length as control   indicating control type. Ignored if control   is not specified. Ignored if harm is not specified.   Ignored if library is specified.                  |
+|     --help   (-h)             |     No                                      |     Flag          |     Show help and then   exit.                                                                                                                                                                                              |
 
-Call `bin/crispieR-lib.R --help` for detailed usage instructions.
+## Modes
 
-Peripheral scripts `bin/crispieR-cts.R` and `bin/crispieR-up.R` use pre-generated exorcise outputs as sources of reannotation, specifying the exorcise file using `-l`. If `-l` is not specified, then these scripts run in ad-hoc mode and the above options are required.
+Exorcise can use previous exorcise outputs (exorcise libraries) to reannotate sequences without recalculation of the entire sequence vector each time.
 
-## Output
-The main output of exorcise is the master reannotation file: `6a-LIBRARY_master.tsv`, which contains mappings of the input nucleotide sequences with the alignment coordinates, attention coordinates, and features.
+When an exorcise library is not specified, then it is calculated from the genome and exome. This is called ad-hoc mode. Ad-hoc mode can take a long time (from 20 minutes to over a week, depending on inputs) to run BLAT and the group-level harmonisation algorithm. The output can be used as an exorcise library the next time that sequences need to be reannotated in the same genome/exome context. 
 
-If an original feature vector is supplied, then an inferred mapping file, `6b-LIBRARY_inferred.tsv` is also created. This contains one-to-one mappings of pre-annotated features with exorcise reannotated features.
+When an exorcise library is specified, then the sequence is used as a join index between the exorcise library and the input file. This mode is extremely fast.
 
-If any controls were specified, then a negative control report file `6c-LIBRARY_negctrl.tsv` is also created. This file contains only controls and is useful for seeing if any control sequences mapped to non-control regions, i.e. genomic regions with features.
+## Outputs
+
+Exorcise outputs a single exorcise.tsv file as well as intermediate files for diagnostic purposes. If you are happy with the results, then the intermediate files can be removed.
+
+Exorcise uses checkpointing. It checks for the presence of an intermediate file and uses it rather than regenerating it if it exists from a previous run.
+
+|     File                                          |     Description                                                                   |
+|---------------------------------------------------|-----------------------------------------------------------------------------------|
+|     exorcise.1-seq.fa                             |     Sequences plus PAM to   be sent to BLAT.                                      |
+|     exorcise.2-genome.2bit_BLAT.psl               |     BLAT genome alignment   results.                                              |
+|     exorcise.3-genome.2bit_genomicRanges.tsv      |     Coordinates of BLAT   alignments and calculated cut sites.                    |
+|     exorcise.3-genome.2bit_genomicSeqSpecs.tsv    |     Coordinates of BLAT   alignments to be sent for sequence validation.          |
+|     exorcise.3-genome.2bit_genomicSeqs.fa         |     Validated sequences.                                                          |
+|     exorcise.4-exome.gz_exonHits.tsv              |     BLAT alignments with   annotations inherited from the exome.                  |
+|     exorcise.5-exome.gz_exonDist.tsv              |     BLAT alignments and   exome annotations with distance to the nearest exon.    |
+|     exorcise.tsv                                  |     Main exorcise output   file.                                                  |
+
+The main exorcise output file is exorcise.tsv. Exorcise outputs are in columns starting with exo_. Arbitrary columns included in the input file are appended after the exorcise columns.
+
+|     Column        |     Description                                                                    |
+|-------------------|------------------------------------------------------------------------------------|
+|     exo_id        |     Unique identifier for   this exorcise reannotation.                            |
+|     exo_seq       |     Sequence.                                                                      |
+|     exo_symbol    |     Sequence-level   annotation from exome.                                        |
+|     exo_harm      |     Group-level annotation   (harmonisation) from exome.                           |
+|     exo_orig      |     Original annotation.                                                           |
+|     exo_target    |     Genome coordinates of   alignment between sequence plus PAM and the genome.    |
+|     exo_cut       |     Genome coordinates of   the cut site.                                          |
+|     ...           |     Arbitrary columns   included in the input file.                                |
 
 ## About
 exorcise was developed by Dr Simon Lam, University of Cambridge, mailto:sl681@cam.ac.uk.
