@@ -19,8 +19,9 @@
 # 0.9.2         2023-07-21T17-00-00   various fixes
 # 0.9.3         2023-07-21T17-10-00   various fixes
 # 0.9.4         2023-07-24T09-40-00   fix duplicated guide ids for same-locus off-targets
+# 0.9.5         2023-07-24T12-20-00   fix multiple control types behaviour
 
-ver <- "0.9.4"
+ver <- "0.9.5"
 
 #### INIT ####
 suppressWarnings(suppressMessages({
@@ -133,7 +134,7 @@ runBlat <- function(opt, authors, blats) {
   blat_command <- "blat"                                                   # external scripts and common parameters
   blat_params <- paste0("-stepSize=4 -tileSize=10 -fine -repMatch=2000000 -minScore=", minScore, " -minIdentity=100")
   
-  while(file.not.exist.or.zero(blats$file_psl)) {
+  if(file.not.exist.or.zero(blats$file_psl)) {
       dir.create(dirname(blats$file_psl), showWarnings = F)
       run_command <- paste(blat_command, blats$file_genome, blats$file_sgRNAs, blats$file_psl, blat_params)
       log_info("Sending to BLAT: ", run_command)
@@ -146,9 +147,15 @@ runBlat <- function(opt, authors, blats) {
 # Convert psl to genomic ranges
 runPtgr <- function(blats) {
   
-      while(file.not.exist.or.zero(blats$file_genomic_ranges)) {
+      if(file.not.exist.or.zero(blats$file_genomic_ranges)) {
       infile <- blats$file_psl
       outfile <- blats$file_genomic_ranges
+      
+      psl <- suppressWarnings(fread(infile))
+      if (nrow(psl) < 6) {
+        log_error("No alignments found between ", opt$infile, " and ", opt$genome, ". Did you specify the correct --guide for the --infile? Did you specify the correct --genome? Quitting.")
+        stop("FATAL: Quitting due to unrecoverable error.", call. = F)
+      }
       
       psl <- fread(infile, skip=5)                                                                                                                # ignore first 5 rows with nothing in them
       psl <- lapply(psl, function(x) gsub(",$", "", x))                                                                                           # fix trailing commas
@@ -284,7 +291,7 @@ import_hits <- function(file_genomic_ranges, hits_cols) {
 
 runGrtem <- function(blats) {
   
-    while(file.not.exist.or.zero(blats$file_genomic_ranges_matched) | file.not.exist.or.zero(blats$file_genomic_ranges_distances)) {
+    if(file.not.exist.or.zero(blats$file_genomic_ranges_matched) | file.not.exist.or.zero(blats$file_genomic_ranges_distances)) {
       log_info("Obtaining exonic hits... ", blats$file_exons, "...")
       
       exome_cols <- inferExomeCols(blats$file_exons)                         # Infer column identities in the exome file
@@ -329,13 +336,14 @@ runGrtem <- function(blats) {
 # Write master mapping file
 exorcisemaster <- function(premaster, blats, opt) {
   
+  
   for (i in 1:length(premaster)) {
     premaster[[i]][which(is.na(premaster[[i]]) | premaster[[i]] == "")] <- "X"
   }
   
   if(is.null(opt$control)) {
     ncontrols <- length(premaster$exo_symbol[which(premaster$exo_symbol == "X")])
-    premaster$exo_symbol[which(premaster$exo_symbol == "X")] <- paste0("Non-targeting", 1:ncontrols)
+    premaster$exo_symbol[which(premaster$exo_symbol == "X")] <- paste0("exo_Non-targeting", 1:ncontrols)
   }
   
   # Fix controls
@@ -347,7 +355,10 @@ exorcisemaster <- function(premaster, blats, opt) {
 
         nThisControl <- length(premaster$exo_symbol[control_guides & premaster$exo_symbol == "X"])
         premaster$exo_symbol[control_guides & premaster$exo_symbol == "X"] <- paste0(opt$control_type[s], 1:nThisControl)   # Map control guides to control annotations unless there is an approved Symbol column
-      }
+    }
+    
+    ncontrols <- length(premaster$exo_symbol[which(premaster$exo_symbol == "X")])
+    premaster$exo_symbol[which(premaster$exo_symbol == "X")] <- paste0("exo_Non-targeting_", 1:ncontrols) # Catch the remaining non-targeting guides
     }
   
   master <- premaster %>% unique()
@@ -359,10 +370,19 @@ exorcisemaster <- function(premaster, blats, opt) {
     simple <- exorciseinferTargets(master, blats, opt)
     master <- left_join(master, simple, by = "exo_orig") %>%
       mutate(exo_harm = case_when(is.na(exo_harm) ~ exo_symbol, # Accept harmonised symbol if found
-                                  T ~ exo_harm),                # Accept exorcised symbol if no harmonised symbol
-             exo_harm = case_when(grepl(paste0(paste0("(^", c("X", opt$control_type), "\\d+$)"), collapse = "|"), exo_symbol) ~ exo_symbol, # For control guides, accept exorcised symbol without harmonisation
-                                  T ~ exo_harm)) %>%
-      relocate(exo_id, exo_seq, exo_symbol, exo_harm, exo_orig, exo_target, exo_cut)
+                                  T ~ exo_harm))                # Accept exorcised symbol if no harmonised symbol
+             
+    if (length(opt$control) > 0) { # For control guides, retain control types in the harmonised column, ie. without exorcism
+      for (i in 1:length(opt$control)) {
+        thisControlPattern <- opt$control[i]
+        thisControlType <- opt$control_type[i]
+        master <- master %>%
+          mutate(exo_harm = case_when(grepl(thisControlPattern, exo_orig) ~ paste0(thisControlType, "_", 1:n()),
+                                      T ~ exo_harm))
+      }
+    }
+            
+    master <- master %>% relocate(exo_id, exo_seq, exo_symbol, exo_harm, exo_orig, exo_target, exo_cut)
   } else {
     master <- master %>% relocate(exo_id, exo_seq, exo_symbol, exo_target, exo_cut)
   }
@@ -453,7 +473,7 @@ reannotateExisting <- function(opt) {
 fixOpts <- function(opt) {
   
   # fix comma-separated argument inputs
-  if(!is.null(opt$infiles))      opt$infiles      <- commasplit(opt$infiles)
+  if(!is.null(opt$infile))       opt$infile       <- commasplit(opt$infile)
   if(!is.null(opt$outdir))       opt$outdir       <- commasplit(opt$outdir)
   if(!is.null(opt$seq))          opt$seq          <- commasplit(opt$seq)
   if(!is.null(opt$pam))          opt$pam          <- commasplit(opt$pam)
@@ -462,7 +482,7 @@ fixOpts <- function(opt) {
   if(!is.null(opt$genome))       opt$genome       <- commasplit(opt$genome)
   if(!is.null(opt$exome))        opt$exome        <- commasplit(opt$exome)
   if(!is.null(opt$priorities))   opt$priorities   <- commasplit(opt$priorities)
-  if(!is.null(opt$id))           opt$id           <- commasplit(opt$id)
+  #if(!is.null(opt$id))           opt$id           <- commasplit(opt$id)
   if(!is.null(opt$harm))         opt$harm         <- commasplit(opt$harm)
   if(!is.null(opt$control))      opt$control      <- commasplit(opt$control)
   if(!is.null(opt$control_type)) opt$control_type <- commasplit(opt$control_type)
@@ -493,14 +513,23 @@ fixOpts <- function(opt) {
     if(!file.exists(opt$infile)) {
       opt$infile_glob <- Sys.glob(paste0(opt$infile, "*"))
       if(length(opt$infile_glob) == 0) {
-      errors <- c(errors, paste0("Error: --infile ", opt$infile, " not found."))
+        opt$infile <- NULL
+        errors <- c(errors, paste0("Error: --infile ", opt$infile, " not found."))
       } else {
         opt$infile <- opt$infile_glob
-        warnings <- c(warnings, paste0("Warning: --infile accepted as globbed argument ", opt$infile))
+        warnings <- c(warnings, paste0("Warning: --infile accepted as globbed argument ", opt$infile, "."))
       }
     }
   } else {
     errors <- c(errors, paste0("Error: --infile not specified."))
+  }
+  
+  # check infile headers
+  if(length(opt$infile) > 0) {
+    opt$infile_headers <- names(fread(opt, nrows = 0))
+    if (any(grepl("^exo_", opt$infile_headers))) {
+      warnings <- c(warnings, paste0("Warning: --infile ", opt$infile, " contains exorcise-like column names (\"exo_\"). These might be clobbered."))
+    }
   }
   
   # check outdir
@@ -527,6 +556,11 @@ fixOpts <- function(opt) {
       errors <- c(errors, paste0("Error: --seq must be an integer, got ", opt$seq, "."))
     } else {
       opt$seq <- as.numeric(opt$seq)
+      if (length(opt$infile) > 0) {
+        if (opt$seq > length(opt$infile_headers)) {
+          errors <- c(errors, paste0("Error: --seq is out of bounds, got ", opt$seq, " but --infile only contains ", length(opt$infile_headers), " columns."))
+        }
+      }
     }
   } else {
     errors <- c(errors, paste0("Error: --seq not specified."))
@@ -583,17 +617,17 @@ fixOpts <- function(opt) {
   }
   
   # check mode
-  if(length(opt$mode) > 0) {
-    if(length(opt$mode) > 1) {
-      opt$mode <- opt$mode[1]
-      warnings <- c(warnings, paste0("Warning: --mode received more than one argument. Using first value only: ", opt$mode, "."))
-    }
-    opt$mode <- toupper(opt$mode)
-    if(!(opt$mode %in% c("KO", "A", "I"))) {
-      warnings <- c(warnings, paste0("Warning: --mode received an invalid value: ", opt$mode, ". Falling back to KO."))
-      opt$mode <- "KO"
-    }
-  }
+  # if(length(opt$mode) > 0) {
+  #   if(length(opt$mode) > 1) {
+  #     opt$mode <- opt$mode[1]
+  #     warnings <- c(warnings, paste0("Warning: --mode received more than one argument. Using first value only: ", opt$mode, "."))
+  #   }
+  #   opt$mode <- toupper(opt$mode)
+  #   if(!(opt$mode %in% c("KO", "A", "I"))) {
+  #     warnings <- c(warnings, paste0("Warning: --mode received an invalid value: ", opt$mode, ". Falling back to KO."))
+  #     opt$mode <- "KO"
+  #   }
+  # }
   
   # check genome
   if(length(opt$genome) > 0) {
@@ -680,21 +714,26 @@ fixOpts <- function(opt) {
   }
   
   # check id
-  if(length(opt$id) > 0) {
-    if(opt$adhoc) {
-      if(length(opt$id) > 1) {
-        opt$id <- opt$id[1]
-        warnings <- c(warnings, paste0("Warning: --id received more than one argument. Using first value only: ", opt$id, "."))
-      }
-      if(!grepl("^\\d+$", opt$id)) {
-        errors <- c(errors, paste0("Error: --id must be an integer, got ", opt$id, "."))
-      } else {
-        opt$id <- as.numeric(opt$id)
-      }
-    } else {
-      warnings <- c(warnings, paste0("Warning: --id specified outside of ad-hoc mode. Ignoring."))
-    }
-  }
+  # if(length(opt$id) > 0) {
+  #   if(opt$adhoc) {
+  #     if(length(opt$id) > 1) {
+  #       opt$id <- opt$id[1]
+  #       warnings <- c(warnings, paste0("Warning: --id received more than one argument. Using first value only: ", opt$id, "."))
+  #     }
+  #     if(!grepl("^\\d+$", opt$id)) {
+  #       errors <- c(errors, paste0("Error: --id must be an integer, got ", opt$id, "."))
+  #     } else {
+  #       opt$id <- as.numeric(opt$id)
+  #       if (length(opt$infile) > 0) {
+  #         if (opt$id > length(opt$infile_headers)) {
+  #           errors <- c(errors, paste0("Error: --id is out of bounds, got ", opt$id, " but --infile only contains ", length(opt$infile_headers), " columns."))
+  #         }
+  #       }
+  #     }
+  #   } else {
+  #     warnings <- c(warnings, paste0("Warning: --id specified outside of ad-hoc mode. Ignoring."))
+  #   }
+  # }
   
   # check harm
   if(length(opt$harm) > 0) {
@@ -707,6 +746,11 @@ fixOpts <- function(opt) {
         errors <- c(errors, paste0("Error: --harm must be an integer, got ", opt$harm, "."))
       } else {
         opt$harm <- as.numeric(opt$harm)
+        if (length(opt$infile) > 0) {
+          if (opt$harm > length(opt$infile_headers)) {
+            errors <- c(errors, paste0("Error: --harm is out of bounds, got ", opt$harm, " but --infile only contains ", length(opt$infile_headers), " columns."))
+          }
+        }
       }
     } else {
       warnings <- c(warnings, paste0("Warning: --harm specified outside of ad-hoc mode. Ignoring."))
@@ -739,20 +783,27 @@ fixOpts <- function(opt) {
       } else if(length(opt$control) > 1) {
         if(length(opt$control_type) == 1) {
           opt$control_type <- rep(opt$control_type, length(opt$control))
-        } else if(length(control_type) != length(control)) {
+        } else if(length(opt$control_type) != length(opt$control)) {
           errors <- c(errors, paste0("Error: --control and --control_type lengths are not equal."))
         }
+      }
+      if("exo_Non-targeting" %in% opt$control_type) {
+        errors <- c(errors, paste0("Error: --control_type contains the disallowed value \"exo_Non-targeting\"."))
+      }
+      if(any(duplicated(opt$control_type))) {
+        errors <- c(errors, paste0("Error: --control_type contains duplicated values."))
       }
     } else {
       warnings <- c(warnings, paste0("Warning: --control_type specified outside of ad-hoc mode. Ignoring."))
     }
   } else if(length(opt$control) > 0) {
-    opt$control_type <- "Non-targeting"
-    warnings <- c(warnings, paste0("Warning: --control passed without --control_type. Assuming --control_type is ", opt$control_type, "."))
+    opt$control_type <- paste0("Non-targeting", 1:length(opt$control))
+    warnings <- c(warnings, paste0("Warning: --control passed without --control_type. Assuming --control_type for ", opt$control, " is ", opt$control_type, "."))
   }
   
   # remove temporary options
   opt$infile_glob <- NULL
+  opt$infile_headers <- NULL
   opt$library_glob <- NULL
   opt$library_headers <- NULL
   opt$genome_glob <- NULL
@@ -772,7 +823,11 @@ fixOpts <- function(opt) {
     for (i in 1:length(errors)) {
       log_error(errors[[i]])
     }
-    stop("There were errors in the input. Please check the logfile: ", logfile)
+    if(!is.null(opt$outdir)) {
+      stop("FATAL: There were errors in the input. Quitting. Please check the logfile: ", logfile, ".")
+    } else {
+      stop("FATAL: There were errors in the input. Quitting.", call. = F)
+    }
   }
   
   return(opt)
@@ -819,8 +874,8 @@ if (!interactive()) {
                 help = "(required if --library not specified) Exome.", metavar = "character"),
     make_option(opt_str = c("-y", "--priorities"), type = "character", default = NULL,
                 help = "(required if --library not specified) Priorities file.", metavar = "character"),
-    make_option(opt_str = c("-j", "--id"), type = "character", default = NULL,
-                help = "(optional, ignored if --library specified) ID column number.", metavar = "character"),
+    # make_option(opt_str = c("-j", "--id"), type = "character", default = NULL,
+    #             help = "(optional, ignored if --library specified) ID column number.", metavar = "character"),
     make_option(opt_str = c("-n", "--harm"), type = "character", default = NULL,
                 help = "(optional, ignored if --library specified) Existing annotation column number.", metavar = "character"),
     make_option(opt_str = c("-c", "--control"), type = "character", default = NULL,
@@ -832,7 +887,7 @@ if (!interactive()) {
   opt_parser = OptionParser(option_list = option_list)
   opt = parse_args(opt_parser)
   
-  if(!is.null(opt$project_name)) {
+  if(!is.null(opt$outdir)) {
     logfile <- paste0(opt$outdir, "/", opt$project_name, "/logfile_exorcise_", format(Sys.time(), "%Y-%m-%dT%H-%M-%S%Z"), ".log")
     dir.create(dirname(logfile), recursive = T, showWarnings = F)
     log_appender(appender_tee(logfile))
