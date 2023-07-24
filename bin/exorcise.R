@@ -18,8 +18,9 @@
 # 0.9.1         2023-07-21T14-37-00   improved checkpointing
 # 0.9.2         2023-07-21T17-00-00   various fixes
 # 0.9.3         2023-07-21T17-10-00   various fixes
+# 0.9.4         2023-07-24T09-40-00   fix duplicated guide ids for same-locus off-targets
 
-ver <- "0.9.3"
+ver <- "0.9.4"
 
 #### INIT ####
 suppressWarnings(suppressMessages({
@@ -102,11 +103,7 @@ importAuthorsLib <- function(opt) {
   log_info("Importing file ", opt$infile)
   authors <- fread(opt$infile)
   
-  if(!is.null(opt$id)) {
-    authors <- authors %>% mutate(exo_id = paste0("exorcise_", 1:n(), "_", .[[opt$id]], "_", .[[opt$seq]]))
-  } else {
-    authors <- authors %>% mutate(exo_id = paste0("exorcise_", 1:n(), "_", toupper(.[[opt$seq]])))
-  }
+  authors <- authors %>% mutate(exo_id = paste0("exorcise_", 1:n()))
   
   authors <- authors %>%                               # read authors' file
     as_tibble() %>%
@@ -164,15 +161,13 @@ runPtgr <- function(blats) {
       ranges <- GRanges(seqnames = psl$`T name`,                                                                                                  # verify valid genomic ranges by making a GRanges object
                         ranges = IRanges(start = as.numeric(psl$`T start`),
                                          end = as.numeric(psl$`T end`)),
-                        exo_id = psl$`Q name`,
                         strand = psl$strand)
       out <- tibble(seqnames = as.character(rep(ranges@seqnames@values, ranges@seqnames@lengths)),                                                # evaluate RLE to get the seqnames
                     guideBegin = ranges@ranges@start,
                     guideFinal = ranges@ranges@start + ranges@ranges@width - 1,                                                                          # end is start + width - 1
-                    exo_id = ranges$exo_id,
                     strand = rep(ranges@strand@values, ranges@strand@lengths),
                     assembly = blats$file_genome)
-      out <- out %>% transmute(seqnames, guideBegin, guideFinal, exo_id, strand, assembly,
+      out <- out %>% transmute(seqnames, guideBegin, guideFinal, strand, assembly,
                                start = case_when(strand == "+" ~ guideFinal - (3 + nchar(opt$pam)), # -3 to -4 upstream from PAM is the cut site
                                                  strand == "-" ~ guideBegin + (3 + nchar(opt$pam))),
                                end = case_when(strand == "+" ~ guideFinal - (3 + nchar(opt$pam)),
@@ -348,8 +343,7 @@ exorcisemaster <- function(premaster, blats, opt) {
     for (s in 1:length(opt$control)) {
       log_info("Replacing ", opt$control[s], " with ", opt$control_type[s])
       control_guides <- rep(F, nrow(premaster))
-      if ("exo_orig" %in% names(premaster)) control_guides <- control_guides | grepl(opt$control[s], premaster$exo_orig)
-      if ("exo_id" %in% names(premaster)) control_guides <- control_guides | grepl(opt$control[s], premaster$exo_id) # search for the control string in authors' symbols and IDs if those columns exist
+      if ("exo_orig" %in% names(premaster)) control_guides <- control_guides | grepl(opt$control[s], premaster$exo_orig)  # search for the control string in authors' symbols and IDs if those columns exist
 
         nThisControl <- length(premaster$exo_symbol[control_guides & premaster$exo_symbol == "X"])
         premaster$exo_symbol[control_guides & premaster$exo_symbol == "X"] <- paste0(opt$control_type[s], 1:nThisControl)   # Map control guides to control annotations unless there is an approved Symbol column
@@ -373,7 +367,7 @@ exorcisemaster <- function(premaster, blats, opt) {
     master <- master %>% relocate(exo_id, exo_seq, exo_symbol, exo_target, exo_cut)
   }
   
-  master <- master %>% mutate(exo_id = paste0("exorcise_", exo_seq, "_", exo_target))
+  master <- master %>% mutate(exo_id = paste0("exorcise_", exo_seq, "_", exo_target, "_", exo_symbol))
   
   dirwrite(master, outfile_m_tsv, sep = "\t")
   log_info("Wrote master library to ", outfile_m_tsv)
