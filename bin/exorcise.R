@@ -20,8 +20,9 @@
 # 0.9.3         2023-07-21T17-10-00   various fixes
 # 0.9.4         2023-07-24T09-40-00   fix duplicated guide ids for same-locus off-targets
 # 0.9.5         2023-07-24T12-20-00   fix multiple control types behaviour
+# 0.9.6         2023-07-24T14-14-00   fix multiple control types behaviour
 
-ver <- "0.9.5"
+ver <- "0.9.6"
 
 #### INIT ####
 suppressWarnings(suppressMessages({
@@ -354,7 +355,7 @@ exorcisemaster <- function(premaster, blats, opt) {
       if ("exo_orig" %in% names(premaster)) control_guides <- control_guides | grepl(opt$control[s], premaster$exo_orig)  # search for the control string in authors' symbols and IDs if those columns exist
 
         nThisControl <- length(premaster$exo_symbol[control_guides & premaster$exo_symbol == "X"])
-        premaster$exo_symbol[control_guides & premaster$exo_symbol == "X"] <- paste0(opt$control_type[s], 1:nThisControl)   # Map control guides to control annotations unless there is an approved Symbol column
+        premaster$exo_symbol[control_guides & premaster$exo_symbol == "X"] <- paste0(opt$control_type[s], "_", 1:nThisControl)   # Map control guides to control annotations unless there is an approved Symbol column
     }
     
     ncontrols <- length(premaster$exo_symbol[which(premaster$exo_symbol == "X")])
