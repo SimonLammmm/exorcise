@@ -21,8 +21,9 @@
 # 0.9.4         2023-07-24T09-40-00   fix duplicated guide ids for same-locus off-targets
 # 0.9.5         2023-07-24T12-20-00   fix multiple control types behaviour
 # 0.9.6         2023-07-24T14-14-00   fix multiple control types behaviour
+# 0.9.7         2023-07-26T10-17-00   enable harmonisation and control reannotation with exorcised libraries
 
-ver <- "0.9.6"
+ver <- "0.9.7"
 
 #### INIT ####
 suppressWarnings(suppressMessages({
@@ -66,6 +67,8 @@ fread <- function(x, ...) data.table::fread(file = Sys.glob(paste0(x, "*"))[1], 
 reannotateLib <- function(opt) {
   
   if(opt$adhoc) {
+    log_info("Using ad-hoc mode: genome and exome specified.")
+    
     authors <- importAuthorsLib(opt)
     blats <- list(file_genome = opt$genome,
                   file_exons = opt$exome,
@@ -78,55 +81,55 @@ reannotateLib <- function(opt) {
                   file_genomic_ranges_matched = paste0(opt$outdir, "/exorcise.4-", sub(".+/(.+?)$", "\\1", opt$exome), "_exonHits.tsv"),
                   file_genomic_ranges_distances = paste0(opt$outdir, "/exorcise.5-", sub(".+/(.+?)$", "\\1", opt$exome), "_exonDist.tsv"),
                   file_exorcise_master_out = paste0(opt$outdir, "/exorcise.tsv"))
-  
+    
     extractGuides(opt, authors, blats)
     runBlat(opt, authors, blats)
     runPtgr(blats)
     runGrtem(blats)
     
-     # generate mapping
-      genome_hits <- fread(blats$file_genomic_ranges, colClasses = "character") %>% transmute(exo_seq, exo_target, exo_cut)
-      exome_hits <- fread(blats$file_genomic_ranges_matched, colClasses = "character") %>% transmute(exo_seq, exo_cut, exo_symbol) %>% unique()
-      all_mappings <- left_join(genome_hits, exome_hits, by = c("exo_seq", "exo_cut")) %>% unique()
+    # generate mapping
+    genome_hits <- fread(blats$file_genomic_ranges, colClasses = "character") %>% transmute(exo_seq, exo_target, exo_cut)
+    exome_hits <- fread(blats$file_genomic_ranges_matched, colClasses = "character") %>% transmute(exo_seq, exo_cut, exo_symbol) %>% unique()
+    all_mappings <- left_join(genome_hits, exome_hits, by = c("exo_seq", "exo_cut")) %>% unique()
     
     premaster <- left_join(authors, all_mappings, by = "exo_seq")
-    master <- exorcisemaster(premaster, blats, opt)
+    master <- exorcisemaster(premaster, opt)
+    
+    outfile_m_tsv <- blats$file_exorcise_master_out
+    dirwrite(master, outfile_m_tsv, sep = "\t")
+    log_info("Wrote master library to ", outfile_m_tsv)
     
   } else {
+    log_info("Using post-hoc mode: exorcised library specified.")
     reannotateExisting(opt)
   }
- 
 }
 
 ### OTHER FUNCTIONS ####
 
 # Import authors' original library files, extracting original symbols, detecting/creating a primary key, and removing adapters where necessary
 importAuthorsLib <- function(opt) {
-  log_info("Importing file ", opt$infile)
+  log_info("Opening file ", opt$infile, "...")
   authors <- fread(opt$infile)
-  
   authors <- authors %>% mutate(exo_id = paste0("exorcise_", 1:n()))
-  
   authors <- authors %>%                               # read authors' file
     as_tibble() %>%
     relocate(exo_id, exo_seq = opt$seq, exo_orig = opt$harm) %>%     # select appropriate columns
     unique()
-  
   return(authors)
 }
 
 # Use authors' original library to extract guide RNA sequences for alignment
 extractGuides <- function(opt, authors, blats) {
-  log_info("Creating sequence FASTA")
+  log_info("Extracting guide sequences...")
   sgRNAs <- paste0(">", authors$exo_id, "\n", authors$exo_seq, opt$pam)
   dirwrite(list(sgRNAs), blats$file_sgRNAs, sep = "\n", quote = F)
-  log_info("Wrote sgRNA FASTA to ", blats$file_sgRNAs)
   return()
 }
 
 # Run BLAT
 runBlat <- function(opt, authors, blats) {
-  if(length(opt$pam) == 1) {
+  if(length(opt$pam) > 0) {
     blatPam <- gsub("[^ATCG]", "", opt$pam)
     minScore <- min(nchar(authors$exo_seq)) + nchar(blatPam)
   } else {
@@ -136,10 +139,12 @@ runBlat <- function(opt, authors, blats) {
   blat_params <- paste0("-stepSize=4 -tileSize=10 -fine -repMatch=2000000 -minScore=", minScore, " -minIdentity=100")
   
   if(file.not.exist.or.zero(blats$file_psl)) {
-      dir.create(dirname(blats$file_psl), showWarnings = F)
-      run_command <- paste(blat_command, blats$file_genome, blats$file_sgRNAs, blats$file_psl, blat_params)
-      log_info("Sending to BLAT: ", run_command)
-      system(run_command)
+    dir.create(dirname(blats$file_psl), showWarnings = F)
+    run_command <- paste(blat_command, blats$file_genome, blats$file_sgRNAs, blats$file_psl, blat_params)
+    log_info("Sending to BLAT: ", run_command, " ...")
+    system(run_command)
+  } else {
+    log_info("Not running BLAT: results already exist, ", blats$file_psl, ".")
   }
   
   return()
@@ -148,65 +153,68 @@ runBlat <- function(opt, authors, blats) {
 # Convert psl to genomic ranges
 runPtgr <- function(blats) {
   
-      if(file.not.exist.or.zero(blats$file_genomic_ranges)) {
-      infile <- blats$file_psl
-      outfile <- blats$file_genomic_ranges
-      
-      psl <- suppressWarnings(fread(infile))
-      if (nrow(psl) < 6) {
-        log_error("No alignments found between ", opt$infile, " and ", opt$genome, ". Did you specify the correct --guide for the --infile? Did you specify the correct --genome? Quitting.")
-        stop("FATAL: Quitting due to unrecoverable error.", call. = F)
-      }
-      
-      psl <- fread(infile, skip=5)                                                                                                                # ignore first 5 rows with nothing in them
-      psl <- lapply(psl, function(x) gsub(",$", "", x))                                                                                           # fix trailing commas
-      psl <- as_tibble(psl)
-      names(psl) <- c("match", "mismatch", "rep. match", "N's", "Q gap count", "Q gap bases", "T gap count", "T gap bases", "strand", "Q name",   # fix names
-                      "Q size", "Q start", "Q end", "T name", "T size", "T start", "T end", "block count", "blockSizes", "qStarts", "tStarts")
-      log_info("Obtaining genomic hits... ", infile, "...")
-      psl <- psl %>%
-        filter(`Q end` == `Q size`) %>% filter(`block count` == 1) %>% filter(`Q start` == 0)                                                     # we're only interested in perfect matches
-      ranges <- GRanges(seqnames = psl$`T name`,                                                                                                  # verify valid genomic ranges by making a GRanges object
-                        ranges = IRanges(start = as.numeric(psl$`T start`),
-                                         end = as.numeric(psl$`T end`)),
-                        strand = psl$strand)
-      out <- tibble(seqnames = as.character(rep(ranges@seqnames@values, ranges@seqnames@lengths)),                                                # evaluate RLE to get the seqnames
-                    guideBegin = ranges@ranges@start,
-                    guideFinal = ranges@ranges@start + ranges@ranges@width - 1,                                                                          # end is start + width - 1
-                    strand = rep(ranges@strand@values, ranges@strand@lengths),
-                    assembly = blats$file_genome)
-      out <- out %>% transmute(seqnames, guideBegin, guideFinal, strand, assembly,
-                               start = case_when(strand == "+" ~ guideFinal - (3 + nchar(opt$pam)), # -3 to -4 upstream from PAM is the cut site
-                                                 strand == "-" ~ guideBegin + (3 + nchar(opt$pam))),
-                               end = case_when(strand == "+" ~ guideFinal - (3 + nchar(opt$pam)),
+  if(file.not.exist.or.zero(blats$file_genomic_ranges)) {
+    log_info("Finding alignment coordinates...")
+    infile <- blats$file_psl
+    outfile <- blats$file_genomic_ranges
+    
+    psl <- suppressWarnings(fread(infile))
+    if (nrow(psl) < 6) {
+      log_error("No alignments found between ", opt$infile, " and ", opt$genome, ". Did you specify the correct --guide for the --infile? Did you specify the correct --genome? Quitting.")
+      stop("FATAL: Quitting due to unrecoverable error.", call. = F)
+    }
+    
+    psl <- fread(infile, skip=5)                                                                                                                # ignore first 5 rows with nothing in them
+    psl <- lapply(psl, function(x) gsub(",$", "", x))                                                                                           # fix trailing commas
+    psl <- as_tibble(psl)
+    names(psl) <- c("match", "mismatch", "rep. match", "N's", "Q gap count", "Q gap bases", "T gap count", "T gap bases", "strand", "Q name",   # fix names
+                    "Q size", "Q start", "Q end", "T name", "T size", "T start", "T end", "block count", "blockSizes", "qStarts", "tStarts")
+    psl <- psl %>%
+      filter(`Q end` == `Q size`) %>% filter(`block count` == 1) %>% filter(`Q start` == 0)                                                     # we're only interested in perfect matches
+    ranges <- GRanges(seqnames = psl$`T name`,                                                                                                  # verify valid genomic ranges by making a GRanges object
+                      ranges = IRanges(start = as.numeric(psl$`T start`),
+                                       end = as.numeric(psl$`T end`)),
+                      strand = psl$strand)
+    out <- tibble(seqnames = as.character(rep(ranges@seqnames@values, ranges@seqnames@lengths)),                                                # evaluate RLE to get the seqnames
+                  guideBegin = ranges@ranges@start,
+                  guideFinal = ranges@ranges@start + ranges@ranges@width - 1,                                                                          # end is start + width - 1
+                  strand = rep(ranges@strand@values, ranges@strand@lengths),
+                  assembly = blats$file_genome)
+    out <- out %>% transmute(seqnames, guideBegin, guideFinal, strand, assembly,
+                             start = case_when(strand == "+" ~ guideFinal - (3 + nchar(opt$pam)), # -3 to -4 upstream from PAM is the cut site
                                                strand == "-" ~ guideBegin + (3 + nchar(opt$pam))),
-                               seqSpec = case_when(strand == "+" ~ paste0(seqnames, ":", guideBegin, "-", guideFinal - nchar(opt$pam)),
-                                                   strand == "-" ~ paste0(seqnames, ":", guideBegin + nchar(opt$pam), "-", (guideFinal))),
-                               exo_target = paste0(seqnames, ":", guideBegin, "-", guideFinal, "_", strand),
-                               exo_cut = paste0(seqnames, ":", start))
-      
-      fwrite(as.list(out$seqSpec), blats$file_genomic_seqSpecs, sep = "\n", col.names = F)
-      system(paste0("twoBitToFa ", blats$file_genome, " -seqList=", blats$file_genomic_seqSpecs, " ", blats$file_genomic_seqs))
-      
-      seq <- fread(blats$file_genomic_seqs, header = F)
-      seq <- tibble(seqSpec = seq %>% filter(grepl("^>", V1)) %>% mutate(V1 = sub("^>", "", V1)) %>% unlist(),
-                    exo_seq = seq %>% filter(!grepl("^>", V1)) %>% unlist())
-      
-      revcom <- function(x) {
-        r <- foreach(i = x, .combine = "c") %do% {
-          y = chartr("ACGT", "TGCA", toupper(i))
-          y = intToUtf8(rev(utf8ToInt(y)))
-        }
-        return(r)
+                             end = case_when(strand == "+" ~ guideFinal - (3 + nchar(opt$pam)),
+                                             strand == "-" ~ guideBegin + (3 + nchar(opt$pam))),
+                             seqSpec = case_when(strand == "+" ~ paste0(seqnames, ":", guideBegin, "-", guideFinal - nchar(opt$pam)),
+                                                 strand == "-" ~ paste0(seqnames, ":", guideBegin + nchar(opt$pam), "-", (guideFinal))),
+                             exo_target = paste0(seqnames, ":", guideBegin, "-", guideFinal, "_", strand),
+                             exo_cut = paste0(seqnames, ":", start))
+    
+    
+    fwrite(as.list(out$seqSpec), blats$file_genomic_seqSpecs, sep = "\n", col.names = F)
+    log_info("Verifying sequence of genome hits: ", run_command, " ...")
+    system(paste0("twoBitToFa ", blats$file_genome, " -seqList=", blats$file_genomic_seqSpecs, " ", blats$file_genomic_seqs))
+    
+    seq <- fread(blats$file_genomic_seqs, header = F)
+    seq <- tibble(seqSpec = seq %>% filter(grepl("^>", V1)) %>% mutate(V1 = sub("^>", "", V1)) %>% unlist(),
+                  exo_seq = seq %>% filter(!grepl("^>", V1)) %>% unlist())
+    
+    revcom <- function(x) {
+      r <- foreach(i = x, .combine = "c") %do% {
+        y = chartr("ACGT", "TGCA", toupper(i))
+        y = intToUtf8(rev(utf8ToInt(y)))
       }
-      
-      out <- out %>% mutate(exo_seq = seq$exo_seq,
-                            exo_seq = case_when(strand == "+" ~ toupper(exo_seq),
-                                                strand == "-" ~ revcom(exo_seq)))
-      
-      dir.create(dirname(outfile), recursive = T, showWarnings = F)							
-      fwrite(out, outfile, sep = "\t") 
-      log_info("Wrote genomic hits file to ", outfile)
+      return(r)
+    }
+    
+    out <- out %>% mutate(exo_seq = seq$exo_seq,
+                          exo_seq = case_when(strand == "+" ~ toupper(exo_seq),
+                                              strand == "-" ~ revcom(exo_seq)))
+    
+    dir.create(dirname(outfile), recursive = T, showWarnings = F)							
+    fwrite(out, outfile, sep = "\t") 
+  } else {
+    log_info("Not recalculating genomic hit coordinates: results already exist, ", blats$file_genomic_ranges, ".")
   }
   
   return()
@@ -292,54 +300,54 @@ import_hits <- function(file_genomic_ranges, hits_cols) {
 
 runGrtem <- function(blats) {
   
-    if(file.not.exist.or.zero(blats$file_genomic_ranges_matched) | file.not.exist.or.zero(blats$file_genomic_ranges_distances)) {
-      log_info("Obtaining exonic hits... ", blats$file_exons, "...")
-      
-      exome_cols <- inferExomeCols(blats$file_exons)                         # Infer column identities in the exome file
-      hits_cols <- inferHitsCols(blats$file_genomic_ranges)                  # Infer column identities in the hits file
-      
-      exons <- import_exome(blats$file_exons, exome_cols)                    # Make a gRanges object from the exome file (with Symbol column to provide re-annotations)
-      hits <- import_hits(blats$file_genomic_ranges, hits_cols)              # Make a gRanges object from the hits file (with ID column indicating guides in the library to be reannotated)
-      
-      exon_hits <- suppressWarnings(findOverlaps(hits, exons))                  # Make a gRanges Hits object indicating the pairs of gRanges that overlap between query (hits) and subject (exome)
-      exon_hitsRanges <- suppressWarnings(findOverlapPairs(hits, exons))        # Make a gRanges Pairs object indicating the genomic ranges of pairs of gRanges that overlap between the first (hits) and second (exome)
-      sgrna_hits <- GRanges(exon_hitsRanges@first,                              # Make a gRanges object which contains the genomic ranges of the hits and the Symbols from the exome
-                            exo_symbol = exons$exo_symbol[exon_hits@to],
-                            exo_seq = as.character(hits$exo_seq[exon_hits@from]))
-      mapping <- as_tibble(sgrna_hits) %>%
-        mutate(exo_cut = paste0(seqnames, ":", start)) %>%
-        unique()
-      mapping$assembly <- blats$file_genome
-      mapping$exome <- blats$file_exons
-      
-      distances <- suppressWarnings(distanceToNearest(hits, exons, select = "arbitrary")) # Make a gRanges Hits object showing the distances from each hit (queryHits) to the nearest exon in the exome (subjectHits)
-      sgrna_distances <- GRanges(hits[distances@from],                          # Make a gRanges object annotated with the gene of the nearest exon and the distance to that exon
-                                 nearestGene = exons$exo_symbol[distances@to],
-                                 distance = distances@elementMetadata$distance,
-                                 exo_seq = as.character(hits$exo_seq[distances@from]))
-      
-      final_distances <- as_tibble(sgrna_distances) %>% 
-        mutate(exo_cut = paste0(seqnames, ":", start)) %>%
-        unique()
-      final_distances$assembly <- blats$file_genome
-      final_distances$exome <- blats$file_exons
-      
-      dir.create(dirname(blats$file_genomic_ranges_matched), recursive = T, showWarnings = F)
-      dir.create(dirname(blats$file_genomic_ranges_distances), recursive = T, showWarnings = F)
-      fwrite(mapping, blats$file_genomic_ranges_matched, sep = "\t")
-      log_info("Wrote exonic hits to ", blats$file_genomic_ranges_matched)
-      fwrite(final_distances, blats$file_genomic_ranges_distances, sep = "\t")
-      log_info("Wrote exonic distances to ", blats$file_genomic_ranges_distances)
-    }
+  if(file.not.exist.or.zero(blats$file_genomic_ranges_matched) | file.not.exist.or.zero(blats$file_genomic_ranges_distances)) {
+    log_info("Determining exonic hits... ", blats$file_exons, "...")
+    
+    exome_cols <- inferExomeCols(blats$file_exons)                         # Infer column identities in the exome file
+    hits_cols <- inferHitsCols(blats$file_genomic_ranges)                  # Infer column identities in the hits file
+    
+    exons <- import_exome(blats$file_exons, exome_cols)                    # Make a gRanges object from the exome file (with Symbol column to provide re-annotations)
+    hits <- import_hits(blats$file_genomic_ranges, hits_cols)              # Make a gRanges object from the hits file (with ID column indicating guides in the library to be reannotated)
+    
+    exon_hits <- suppressWarnings(findOverlaps(hits, exons))                  # Make a gRanges Hits object indicating the pairs of gRanges that overlap between query (hits) and subject (exome)
+    exon_hitsRanges <- suppressWarnings(findOverlapPairs(hits, exons))        # Make a gRanges Pairs object indicating the genomic ranges of pairs of gRanges that overlap between the first (hits) and second (exome)
+    sgrna_hits <- GRanges(exon_hitsRanges@first,                              # Make a gRanges object which contains the genomic ranges of the hits and the Symbols from the exome
+                          exo_symbol = exons$exo_symbol[exon_hits@to],
+                          exo_seq = as.character(hits$exo_seq[exon_hits@from]))
+    mapping <- as_tibble(sgrna_hits) %>%
+      mutate(exo_cut = paste0(seqnames, ":", start)) %>%
+      unique()
+    mapping$assembly <- blats$file_genome
+    mapping$exome <- blats$file_exons
+    
+    distances <- suppressWarnings(distanceToNearest(hits, exons, select = "arbitrary")) # Make a gRanges Hits object showing the distances from each hit (queryHits) to the nearest exon in the exome (subjectHits)
+    sgrna_distances <- GRanges(hits[distances@from],                          # Make a gRanges object annotated with the gene of the nearest exon and the distance to that exon
+                               nearestGene = exons$exo_symbol[distances@to],
+                               distance = distances@elementMetadata$distance,
+                               exo_seq = as.character(hits$exo_seq[distances@from]))
+    
+    final_distances <- as_tibble(sgrna_distances) %>% 
+      mutate(exo_cut = paste0(seqnames, ":", start)) %>%
+      unique()
+    final_distances$assembly <- blats$file_genome
+    final_distances$exome <- blats$file_exons
+    
+    dir.create(dirname(blats$file_genomic_ranges_matched), recursive = T, showWarnings = F)
+    dir.create(dirname(blats$file_genomic_ranges_distances), recursive = T, showWarnings = F)
+    fwrite(mapping, blats$file_genomic_ranges_matched, sep = "\t")
+    fwrite(final_distances, blats$file_genomic_ranges_distances, sep = "\t")
+  } else {
+    log_info("Not recalculating exonic hits: results already exist, ", blats$file_genomic_ranges_matched, ".")
+  }
   return()
 }
 
 # Write master mapping file
-exorcisemaster <- function(premaster, blats, opt) {
+exorcisemaster <- function(premaster, opt) {
   
   
   for (i in 1:length(premaster)) {
-    premaster[[i]][which(is.na(premaster[[i]]) | premaster[[i]] == "")] <- "X"
+    premaster[[i]][which(is.na(premaster[[i]]) | premaster[[i]] == "" | grepl("^exo_Non-targeting_", premaster[[i]]))] <- "X"
   }
   
   if(is.null(opt$control)) {
@@ -350,29 +358,29 @@ exorcisemaster <- function(premaster, blats, opt) {
   # Fix controls
   if (!is.null(opt$control)) {
     for (s in 1:length(opt$control)) {
-      log_info("Replacing ", opt$control[s], " with ", opt$control_type[s])
+      log_info("Finding control sequences: replacing ", opt$control[s], " with ", opt$control_type[s], ".")
       control_guides <- rep(F, nrow(premaster))
       if ("exo_orig" %in% names(premaster)) control_guides <- control_guides | grepl(opt$control[s], premaster$exo_orig)  # search for the control string in authors' symbols and IDs if those columns exist
-
-        nThisControl <- length(premaster$exo_symbol[control_guides & premaster$exo_symbol == "X"])
-        premaster$exo_symbol[control_guides & premaster$exo_symbol == "X"] <- paste0(opt$control_type[s], "_", 1:nThisControl)   # Map control guides to control annotations unless there is an approved Symbol column
+      
+      nThisControl <- length(premaster$exo_symbol[control_guides & premaster$exo_symbol == "X"])
+      premaster$exo_symbol[control_guides & premaster$exo_symbol == "X"] <- paste0(opt$control_type[s], "_", 1:nThisControl)   # Map control guides to control annotations unless there is an approved Symbol column
     }
     
     ncontrols <- length(premaster$exo_symbol[which(premaster$exo_symbol == "X")])
     premaster$exo_symbol[which(premaster$exo_symbol == "X")] <- paste0("exo_Non-targeting_", 1:ncontrols) # Catch the remaining non-targeting guides
-    }
+  }
   
   master <- premaster %>% unique()
   
-  # Output
-  outfile_m_tsv <- blats$file_exorcise_master_out
+  # Harmonise
+  
   
   if ("exo_orig" %in% names(master)) {
-    simple <- exorciseinferTargets(master, blats, opt)
+    simple <- exorciseinferTargets(master, opt)
     master <- left_join(master, simple, by = "exo_orig") %>%
       mutate(exo_harm = case_when(is.na(exo_harm) ~ exo_symbol, # Accept harmonised symbol if found
                                   T ~ exo_harm))                # Accept exorcised symbol if no harmonised symbol
-             
+    
     if (length(opt$control) > 0) { # For control guides, retain control types in the harmonised column, ie. without exorcism
       for (i in 1:length(opt$control)) {
         thisControlPattern <- opt$control[i]
@@ -382,7 +390,7 @@ exorcisemaster <- function(premaster, blats, opt) {
                                       T ~ exo_harm))
       }
     }
-            
+    
     master <- master %>% relocate(exo_id, exo_seq, exo_symbol, exo_harm, exo_orig, exo_target, exo_cut)
   } else {
     master <- master %>% relocate(exo_id, exo_seq, exo_symbol, exo_target, exo_cut)
@@ -390,85 +398,96 @@ exorcisemaster <- function(premaster, blats, opt) {
   
   master <- master %>% mutate(exo_id = paste0("exorcise_", exo_seq, "_", exo_target, "_", exo_symbol))
   
-  dirwrite(master, outfile_m_tsv, sep = "\t")
-  log_info("Wrote master library to ", outfile_m_tsv)
+  
   return(master)
 }
 
 # Infer intended target per authors' original symbols and write
-exorciseinferTargets <- function(master, blats, opt) {
+exorciseinferTargets <- function(master, opt) {
   
-      simple <- master %>%
-        dplyr::select(exo_symbol, exo_orig) %>% unique()
-
-    # Load in gene symbol annotations for ranking. This file contains all possible approved symbols and gene classes
-    annot <- fread(opt$priorities)
-    names(annot) <- c("Approved_symbol", "Locus_group")
-    annot$Locus_group <- factor(annot$Locus_group, ordered = T, levels = c("protein-coding gene", "non-coding RNA", "pseudogene", "other")) 
-    
-    # Infer
-    log_info("Inferring intended targets per original symbol...")
-    
-    simple_dup <- simple %>%
-      left_join(annot, by = c("exo_symbol" = "Approved_symbol"))                  # Join the multi-mapped original symbols to annotations for their mapping target
-    simple_dup$Locus_group[which(is.na(simple_dup$Locus_group))] <- "other"
-    
-    simple_dup2 <- simple_dup %>% filter(!grepl(paste0(paste0("(^", c("X", opt$control_type), "\\d+$)"), collapse = "|"), exo_symbol)) # Remove controls and unmapped guides when considering intended target
-
-    dup <- unique(simple_dup2$exo_orig)
-    
-    # Fix multi-mapped original symbols
-    j <- 1
-    tot <- length(dup) 
-    log_info("Inferring intended targets... ")
-    
-    simple_fixed <- data.table(exo_harm = rep("", tot),
-                               exo_orig = rep("", tot))        # Initialise a tibble to contain fixed, singly-mapped original symbols
-    
-    for (s in dup) {  
-      q <- simple_dup2 %>% filter(exo_orig == s)
-      cons <- q %>%                                                                         # Determine the candidates that appeared the most often
-        group_by(exo_symbol) %>%
-        summarise(consensus = n()) %>%
-        mutate(consensus = case_when(consensus == max(consensus) ~ 1,
-                                     T ~ 0))
-      q <- q %>% left_join(cons, by = "exo_symbol") %>% filter(consensus == 1)                  # Eliminate candidates which did not appear the most times
-      q <- q %>% mutate(fit_rank = case_when(exo_symbol == exo_orig ~ 0,                 # Rank remaining, tied 1st place candidates: identical names > protein-coding > ncRNA > pseudogene > others
-                                             T ~ as.numeric(Locus_group)))
-      accept <- q %>% filter(fit_rank == min(fit_rank)) %>% arrange(exo_symbol) %>% head(1)     # If the top rank is still tied, accept the first match alphabetically
-      set(simple_fixed, as.integer(j), "exo_harm", accept$exo_symbol[1])
-      set(simple_fixed, as.integer(j), "exo_orig", accept$exo_orig[1])
-      j <- j + 1
-      if(j %% 1000 == 0) {
-        log_info("Inferring intended targets... ", j, " out of ", tot, " done...")
-      }
+  simple <- master %>%
+    dplyr::select(exo_symbol, exo_orig) %>% unique()
+  
+  # Load in gene symbol annotations for ranking. This file contains all possible approved symbols and gene classes
+  annot <- fread(opt$priorities)
+  names(annot) <- c("Approved_symbol", "Locus_group")
+  annot$Locus_group <- factor(annot$Locus_group, ordered = T, levels = c("protein-coding gene", "non-coding RNA", "pseudogene", "other")) 
+  
+  # Infer
+  
+  simple_dup <- simple %>%
+    left_join(annot, by = c("exo_symbol" = "Approved_symbol"))                  # Join the multi-mapped original symbols to annotations for their mapping target
+  simple_dup$Locus_group[which(is.na(simple_dup$Locus_group))] <- "other"
+  
+  simple_dup2 <- simple_dup %>% filter(!grepl(paste0(paste0("(^", c("X", opt$control_type), "\\d+$)"), collapse = "|"), exo_symbol)) # Remove controls and unmapped guides when considering intended target
+  
+  dup <- unique(simple_dup2$exo_orig)
+  
+  # Fix multi-mapped original symbols
+  j <- 1
+  tot <- length(dup) 
+  log_info("Harmonising... ")
+  
+  simple_fixed <- data.table(exo_harm = rep("", tot),
+                             exo_orig = rep("", tot))        # Initialise a tibble to contain fixed, singly-mapped original symbols
+  
+  for (s in dup) {  
+    q <- simple_dup2 %>% filter(exo_orig == s)
+    cons <- q %>%                                                                         # Determine the candidates that appeared the most often
+      group_by(exo_symbol) %>%
+      summarise(consensus = n()) %>%
+      mutate(consensus = case_when(consensus == max(consensus) ~ 1,
+                                   T ~ 0))
+    q <- q %>% left_join(cons, by = "exo_symbol") %>% filter(consensus == 1)                  # Eliminate candidates which did not appear the most times
+    q <- q %>% mutate(fit_rank = case_when(exo_symbol == exo_orig ~ 0,                 # Rank remaining, tied 1st place candidates: identical names > protein-coding > ncRNA > pseudogene > others
+                                           T ~ as.numeric(Locus_group)))
+    accept <- q %>% filter(fit_rank == min(fit_rank)) %>% arrange(exo_symbol) %>% head(1)     # If the top rank is still tied, accept the first match alphabetically
+    set(simple_fixed, as.integer(j), "exo_harm", accept$exo_symbol[1])
+    set(simple_fixed, as.integer(j), "exo_orig", accept$exo_orig[1])
+    j <- j + 1
+    if(j %% 1000 == 0) {
+      log_info("Harmonising... ", j, " out of ", tot, " groups done...")
     }
-    log_info("Inferring intended targets... ", tot, " out of ", tot, " done.")
-    
-    # Combine
-      simple <- simple_fixed %>% unique()
-      
-    return (simple)
-
+  }
+  log_info("Harmonising... ", tot, " out of ", tot, " groups done.")
+  
+  # Combine
+  simple <- simple_fixed %>% unique()
+  
+  return (simple)
+  
 }
 
 reannotateExisting <- function(opt) {
+  
   input <- fread(opt$infile) %>%
     relocate(exo_seq = opt$seq) %>%
     unique()
+  
   library <- fread(opt$library)
-  if("exo_harm" %in% names(library)) {
-    library <- library %>% select(exo_id, exo_seq, exo_symbol, exo_harm, exo_orig, exo_target, exo_cut) %>% unique()
+  
+  if(!is.null(opt$harm)) {
+    input <- input %>% relocate(exo_orig = opt$harm, exo_seq)
+    library <- library %>% select(exo_id, exo_seq, exo_symbol, exo_target, exo_cut) %>% unique()                         # harm specified: harmonise
+    exorcised <- left_join(input, library, by = "exo_seq")
+    exorcised <- exorcisemaster(exorcised, opt)
   } else {
-    library <- library %>% select(exo_id, exo_seq, exo_symbol, exo_target, exo_cut) %>% unique()
+    if("exo_harm" %in% names(library)) {
+      library <- library %>% select(exo_id, exo_seq, exo_symbol, exo_harm, exo_orig, exo_target, exo_cut) %>% unique()   # harm not specified: inherit harmonisations if exist
+    } else {
+      library <- library %>% select(exo_id, exo_seq, exo_symbol, exo_target, exo_cut) %>% unique()
+    }
+    exorcised <- left_join(input, library, by = "exo_seq")
   }
-  exorcised <- left_join(input, library, by = "exo_seq")
+  
   if("exo_harm" %in% names(exorcised)) {
     exorcised <- exorcised %>% relocate(exo_id, exo_seq, exo_symbol, exo_harm, exo_orig, exo_target, exo_cut)
   } else {
     exorcised <- exorcised %>% relocate(exo_id, exo_seq, exo_symbol, exo_target, exo_cut)
   }
+  
   fwrite(exorcised, paste0(opt$outdir, "/exorcise.tsv"), sep = "\t")
+  
 }
 
 fixOpts <- function(opt) {
@@ -686,34 +705,6 @@ fixOpts <- function(opt) {
     errors <- c(errors, paste0("Error: --exome not passed while in ad-hoc mode."))
   }
   
-  # check priorities
-  if(length(opt$priorities) > 0) {
-    if(length(opt$priorities) > 1) {
-      opt$priorities <- opt$priorities[1]
-      warnings <- c(warnings, paste0("Warning: --priorities received more than one argument. Using first value only: ", opt$priorities, "."))
-    }
-    if(!file.exists(opt$priorities)) {
-      opt$priorities_glob <- Sys.glob(paste0(opt$priorities, "*"))
-      if(length(opt$priorities_glob) == 0) {
-        errors <- c(errors, paste0("Error: --priorities ", opt$priorities, " not found."))
-      } else {
-        opt$priorities <- opt$priorities_glob
-        warnings <- c(warnings, paste0("Warning: --priorities accepted as globbed argument ", opt$priorities))
-      }
-    }
-    if(file.exists(opt$priorities)) {
-      opt$priorities_headers <- names(fread(opt$priorities, nrows = 0))
-      if(!("Approved_symbol" %in% opt$priorities_headers)) {
-        errors <- c(errors, paste0("Error: --priorities ", opt$priorities, " doesn't look like a feature priorities file. Expected an `Approved_symbol` column."))
-      }
-      if(!("Locus_group" %in% opt$priorities_headers)) {
-        errors <- c(errors, paste0("Error: --priorities ", opt$priorities, " doesn't look like a feature priorities file. Expected a `Locus_group` column."))
-      }
-    }
-  } else if(opt$adhoc) {
-    errors <- c(errors, paste0("Error: --priorities not passed while in ad-hoc mode."))
-  }
-  
   # check id
   # if(length(opt$id) > 0) {
   #   if(opt$adhoc) {
@@ -738,64 +729,80 @@ fixOpts <- function(opt) {
   
   # check harm
   if(length(opt$harm) > 0) {
-    if(opt$adhoc) {
-      if(length(opt$harm) > 1) {
-        opt$harm <- opt$harm[1]
-        warnings <- c(warnings, paste0("Warning: --harm received more than one argument. Using first value only: ", opt$harm, "."))
-      }
-      if(!grepl("^\\d+$", opt$harm)) {
-        errors <- c(errors, paste0("Error: --harm must be an integer, got ", opt$harm, "."))
-      } else {
-        opt$harm <- as.numeric(opt$harm)
-        if (length(opt$infile) > 0) {
-          if (opt$harm > length(opt$infile_headers)) {
-            errors <- c(errors, paste0("Error: --harm is out of bounds, got ", opt$harm, " but --infile only contains ", length(opt$infile_headers), " columns."))
-          }
+    if(length(opt$harm) > 1) {
+      opt$harm <- opt$harm[1]
+      warnings <- c(warnings, paste0("Warning: --harm received more than one argument. Using first value only: ", opt$harm, "."))
+    }
+    if(!grepl("^\\d+$", opt$harm)) {
+      errors <- c(errors, paste0("Error: --harm must be an integer, got ", opt$harm, "."))
+    } else {
+      opt$harm <- as.numeric(opt$harm)
+      if (length(opt$infile) > 0) {
+        if (opt$harm > length(opt$infile_headers)) {
+          errors <- c(errors, paste0("Error: --harm is out of bounds, got ", opt$harm, " but --infile only contains ", length(opt$infile_headers), " columns."))
         }
       }
-    } else {
-      warnings <- c(warnings, paste0("Warning: --harm specified outside of ad-hoc mode. Ignoring."))
     }
+  }
+  
+  # check priorities
+  if(length(opt$priorities) > 0) {
+    if(length(opt$priorities) > 1) {
+      opt$priorities <- opt$priorities[1]
+      warnings <- c(warnings, paste0("Warning: --priorities received more than one argument. Using first value only: ", opt$priorities, "."))
+    }
+    if(!file.exists(opt$priorities)) {
+      opt$priorities_glob <- Sys.glob(paste0(opt$priorities, "*"))
+      if(length(opt$priorities_glob) == 0) {
+        errors <- c(errors, paste0("Error: --priorities ", opt$priorities, " not found."))
+      } else {
+        opt$priorities <- opt$priorities_glob
+        warnings <- c(warnings, paste0("Warning: --priorities accepted as globbed argument ", opt$priorities))
+      }
+    }
+    if(file.exists(opt$priorities)) {
+      opt$priorities_headers <- names(fread(opt$priorities, nrows = 0))
+      if(!("Approved_symbol" %in% opt$priorities_headers)) {
+        errors <- c(errors, paste0("Error: --priorities ", opt$priorities, " doesn't look like a feature priorities file. Expected an `Approved_symbol` column."))
+      }
+      if(!("Locus_group" %in% opt$priorities_headers)) {
+        errors <- c(errors, paste0("Error: --priorities ", opt$priorities, " doesn't look like a feature priorities file. Expected a `Locus_group` column."))
+      }
+    }
+  } else if(length(opt$harm) > 0) {
+    errors <- c(errors, paste0("Error: --priorities not passed while --harm passed."))
   }
   
   # check control
   if(length(opt$control) > 0) {
-    if(opt$adhoc) {
-      if(length(opt$harm) == 0) {
-        opt$control <- NULL
-        warnings <- c(warnings, paste0("Warning: --control passed without --harm. Ignoring."))
-      }
-    } else {
-      warnings <- c(warnings, paste0("Warning: --control specified outside of ad-hoc mode. Ignoring."))
+    if(length(opt$harm) == 0) {
+      opt$control <- NULL
+      warnings <- c(warnings, paste0("Warning: --control passed without --harm. Ignoring."))
     }
   }
   
   # check control_type
   if(length(opt$control_type) > 0) {
-    if(opt$adhoc) {
-      if(length(opt$control) == 0) {
-        opt$control_type <- NULL
-        warnings <- c(warnings, paste0("Warning: --control_types passed without --control. Ignoring."))
-      } else if(length(opt$control) == 1) {
-        if(length(opt$control_type) > 1) {
-          opt$control_type <- opt$control_type[1]
-          warnings <- c(warnings, paste0("Warning: --control_type received more than one argument. Using first value only: ", opt$control_type, "."))
-        }
-      } else if(length(opt$control) > 1) {
-        if(length(opt$control_type) == 1) {
-          opt$control_type <- rep(opt$control_type, length(opt$control))
-        } else if(length(opt$control_type) != length(opt$control)) {
-          errors <- c(errors, paste0("Error: --control and --control_type lengths are not equal."))
-        }
+    if(length(opt$control) == 0) {
+      opt$control_type <- NULL
+      warnings <- c(warnings, paste0("Warning: --control_types passed without --control. Ignoring."))
+    } else if(length(opt$control) == 1) {
+      if(length(opt$control_type) > 1) {
+        opt$control_type <- opt$control_type[1]
+        warnings <- c(warnings, paste0("Warning: --control_type received more than one argument. Using first value only: ", opt$control_type, "."))
       }
-      if("exo_Non-targeting" %in% opt$control_type) {
-        errors <- c(errors, paste0("Error: --control_type contains the disallowed value \"exo_Non-targeting\"."))
+    } else if(length(opt$control) > 1) {
+      if(length(opt$control_type) == 1) {
+        opt$control_type <- rep(opt$control_type, length(opt$control))
+      } else if(length(opt$control_type) != length(opt$control)) {
+        errors <- c(errors, paste0("Error: --control and --control_type lengths are not equal."))
       }
-      if(any(duplicated(opt$control_type))) {
-        errors <- c(errors, paste0("Error: --control_type contains duplicated values."))
-      }
-    } else {
-      warnings <- c(warnings, paste0("Warning: --control_type specified outside of ad-hoc mode. Ignoring."))
+    }
+    if("exo_Non-targeting" %in% opt$control_type) {
+      errors <- c(errors, paste0("Error: --control_type contains the disallowed value \"exo_Non-targeting\"."))
+    }
+    if(any(duplicated(opt$control_type))) {
+      errors <- c(errors, paste0("Error: --control_type contains duplicated values."))
     }
   } else if(length(opt$control) > 0) {
     opt$control_type <- paste0("Non-targeting", 1:length(opt$control))
@@ -840,17 +847,16 @@ fixOpts <- function(opt) {
 if (interactive()) {
   opt <- list()
   opt$infile <- "/Users/lam02/Downloads/Test1/test.tsv"
-  opt$outdir <- "/Users/lam02/Downloads/Test1/"
+  opt$outdir <- "/Users/lam02/Downloads/Test3/"
   opt$seq <- "2"
   opt$pam <- NULL
-  opt$genome <- "/Users/lam02/Library/CloudStorage/OneDrive-UniversityofCambridge/Projects/dev/exorcise/data/hg38.2020-09-22.2bit"
-  opt$exome <- "/Users/lam02/Library/CloudStorage/OneDrive-UniversityofCambridge/Projects/dev/exorcise/data/hg38.refseq.exons.tsv"
-  opt$priorities <- "/Users/lam02/Library/CloudStorage/OneDrive-UniversityofCambridge/Projects/dev/exorcise/data/symbol_ids_table.csv"
-  opt$id <- "1"
-  opt$harm <- "3"
-  opt$control <- "control"
-  opt$control_type <- "MyControl"
-  opt$library <- ""
+  opt$genome <- "/Users/lam02/Downloads/hg38.2020-09-22.2bit"
+  opt$exome <- "/Users/lam02/Downloads/hg38.refseq.exons.tsv"
+  opt$priorities <- NULL
+  opt$harm <- NULL
+  opt$control <- NULL
+  opt$control_type <- NULL
+  opt$library <- NULL
 }
 
 ## Execution
@@ -873,30 +879,27 @@ if (!interactive()) {
                 help = "(required if --library not specified) 2bit genome.", metavar = "character"),
     make_option(opt_str = c("-w", "--exome"), type = "character", default = NULL,
                 help = "(required if --library not specified) Exome.", metavar = "character"),
-    make_option(opt_str = c("-y", "--priorities"), type = "character", default = NULL,
-                help = "(required if --library not specified) Priorities file.", metavar = "character"),
     # make_option(opt_str = c("-j", "--id"), type = "character", default = NULL,
     #             help = "(optional, ignored if --library specified) ID column number.", metavar = "character"),
     make_option(opt_str = c("-n", "--harm"), type = "character", default = NULL,
-                help = "(optional, ignored if --library specified) Existing annotation column number.", metavar = "character"),
+                help = "(optional) Existing annotation column number.", metavar = "character"),
+    make_option(opt_str = c("-y", "--priorities"), type = "character", default = NULL,
+                help = "(required if --harm specified) Priorities file.", metavar = "character"),
     make_option(opt_str = c("-c", "--control"), type = "character", default = NULL,
-                help = "(optional, ignored if --library specified) Pattern indicating a control guide (comma-separated list).", metavar = "character"),
+                help = "(optional) Pattern indicating a control guide (comma-separated list).", metavar = "character"),
     make_option(opt_str = c("-d", "--control_type"), type = "character", default = NULL,
-                help = "(optional, ignored if --library specified) List of control guide types. Must be the same length as --control_strings (comma-separated list).", metavar = "character")
+                help = "(optional) List of control guide types. Must be the same length as --control_strings (comma-separated list).", metavar = "character")
   )
   
   opt_parser = OptionParser(option_list = option_list)
   opt = parse_args(opt_parser)
   
-  if(!is.null(opt$outdir)) {
-    logfile <- paste0(opt$outdir, "/", opt$project_name, "/logfile_exorcise_", format(Sys.time(), "%Y-%m-%dT%H-%M-%S%Z"), ".log")
-    dir.create(dirname(logfile), recursive = T, showWarnings = F)
-    log_appender(appender_tee(logfile))
-  }
-  
-  
-  
-  
+}
+
+if(!is.null(opt$outdir)) {
+  logfile <- paste0(opt$outdir, "/", opt$project_name, "/logfile_exorcise_", format(Sys.time(), "%Y-%m-%dT%H-%M-%S%Z"), ".log")
+  dir.create(dirname(logfile), recursive = T, showWarnings = F)
+  log_appender(appender_tee(logfile))
 }
 
 # Parse arguments
