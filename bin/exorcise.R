@@ -26,8 +26,9 @@
 # 0.9.8         2023-07-26T11-15-00   enable explicit non-harmonisation from pre-exorcised library
 # 0.9.8.1       2023-07-26T11-15-00   enable explicit non-harmonisation from pre-exorcised library
 # 0.9.9         2023-07-26T14-37-00   switch to NCBI Dataset Gene downloadable feature priority lists
+# 0.9.9.1       2023-07-26T14-37-00   switch to NCBI Dataset Gene downloadable feature priority lists
 
-ver <- "0.9.9"
+ver <- "0.9.9.1"
 
 #### INIT ####
 suppressWarnings(suppressMessages({
@@ -421,7 +422,7 @@ exorciseinferTargets <- function(master, opt) {
   
   simple_dup <- simple %>%
     left_join(annot, by = c("exo_symbol" = "Symbol"))                  # Join the multi-mapped original symbols to annotations for their mapping target
-  simple_dup$`Gene Type`[which(is.na(simple_dup$`Gene Type`))] <- "other"
+  simple_dup$`Gene Type`[which(is.na(simple_dup$`Gene Type`))] <- "OTHER"
   
   simple_dup2 <- simple_dup %>% filter(!grepl(paste0(paste0("(^", c("X", opt$control_type), "\\d+$)"), collapse = "|"), exo_symbol)) # Remove controls and unmapped guides when considering intended target
   
