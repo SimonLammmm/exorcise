@@ -22,8 +22,9 @@
 # 0.9.5         2023-07-24T12-20-00   fix multiple control types behaviour
 # 0.9.6         2023-07-24T14-14-00   fix multiple control types behaviour
 # 0.9.7         2023-07-26T10-17-00   enable harmonisation and control reannotation with exorcised libraries
+# 0.9.7.1       2023-07-26T10-17-00   enable harmonisation and control reannotation with exorcised libraries
 
-ver <- "0.9.7"
+ver <- "0.9.7.1"
 
 #### INIT ####
 suppressWarnings(suppressMessages({
@@ -768,6 +769,9 @@ fixOpts <- function(opt) {
       if(!("Locus_group" %in% opt$priorities_headers)) {
         errors <- c(errors, paste0("Error: --priorities ", opt$priorities, " doesn't look like a feature priorities file. Expected a `Locus_group` column."))
       }
+    }
+    if(length(opt$harm) == 0) {
+      warnings <- c(warnings, paste0("Warning: --priorities passed without --harm. Ignoring."))
     }
   } else if(length(opt$harm) > 0) {
     errors <- c(errors, paste0("Error: --priorities not passed while --harm passed."))
