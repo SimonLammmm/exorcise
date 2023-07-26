@@ -25,8 +25,9 @@
 # 0.9.7.1       2023-07-26T10-17-00   enable harmonisation and control reannotation with exorcised libraries
 # 0.9.8         2023-07-26T11-15-00   enable explicit non-harmonisation from pre-exorcised library
 # 0.9.8.1       2023-07-26T11-15-00   enable explicit non-harmonisation from pre-exorcised library
+# 0.9.9         2023-07-26T14-37-00   switch to NCBI Dataset Gene downloadable feature priority lists
 
-ver <- "0.9.8.1"
+ver <- "0.9.9"
 
 #### INIT ####
 suppressWarnings(suppressMessages({
@@ -413,14 +414,14 @@ exorciseinferTargets <- function(master, opt) {
   
   # Load in gene symbol annotations for ranking. This file contains all possible approved symbols and gene classes
   annot <- fread(opt$priorities)
-  names(annot) <- c("Approved_symbol", "Locus_group")
-  annot$Locus_group <- factor(annot$Locus_group, ordered = T, levels = c("protein-coding gene", "non-coding RNA", "pseudogene", "other")) 
+  names(annot) <- c("Symbol", "Gene Type")
+  annot$`Gene Type` <- factor(annot$`Gene Type`, ordered = T, levels = c("PROTEIN_CODING", "ncRNA", "PSEUDO", "rRNA", "tRNA", "snRNA", "snoRNA", "scRNA", "BIOLOGICAL_REGION", "OTHER", "")) 
   
   # Infer
   
   simple_dup <- simple %>%
-    left_join(annot, by = c("exo_symbol" = "Approved_symbol"))                  # Join the multi-mapped original symbols to annotations for their mapping target
-  simple_dup$Locus_group[which(is.na(simple_dup$Locus_group))] <- "other"
+    left_join(annot, by = c("exo_symbol" = "Symbol"))                  # Join the multi-mapped original symbols to annotations for their mapping target
+  simple_dup$`Gene Type`[which(is.na(simple_dup$`Gene Type`))] <- "other"
   
   simple_dup2 <- simple_dup %>% filter(!grepl(paste0(paste0("(^", c("X", opt$control_type), "\\d+$)"), collapse = "|"), exo_symbol)) # Remove controls and unmapped guides when considering intended target
   
@@ -443,7 +444,7 @@ exorciseinferTargets <- function(master, opt) {
                                    T ~ 0))
     q <- q %>% left_join(cons, by = "exo_symbol") %>% filter(consensus == 1)                  # Eliminate candidates which did not appear the most times
     q <- q %>% mutate(fit_rank = case_when(exo_symbol == exo_orig ~ 0,                 # Rank remaining, tied 1st place candidates: identical names > protein-coding > ncRNA > pseudogene > others
-                                           T ~ as.numeric(Locus_group)))
+                                           T ~ as.numeric(`Gene Type`)))
     accept <- q %>% filter(fit_rank == min(fit_rank)) %>% arrange(exo_symbol) %>% head(1)     # If the top rank is still tied, accept the first match alphabetically
     set(simple_fixed, as.integer(j), "exo_harm", accept$exo_symbol[1])
     set(simple_fixed, as.integer(j), "exo_orig", accept$exo_orig[1])
@@ -766,11 +767,11 @@ fixOpts <- function(opt) {
     }
     if(file.exists(opt$priorities)) {
       opt$priorities_headers <- names(fread(opt$priorities, nrows = 0))
-      if(!("Approved_symbol" %in% opt$priorities_headers)) {
-        errors <- c(errors, paste0("Error: --priorities ", opt$priorities, " doesn't look like a feature priorities file. Expected an `Approved_symbol` column."))
+      if(!("Symbol" %in% opt$priorities_headers)) {
+        errors <- c(errors, paste0("Error: --priorities ", opt$priorities, " doesn't look like a feature priorities file. Expected a `Symbol` column."))
       }
-      if(!("Locus_group" %in% opt$priorities_headers)) {
-        errors <- c(errors, paste0("Error: --priorities ", opt$priorities, " doesn't look like a feature priorities file. Expected a `Locus_group` column."))
+      if(!("Gene Type" %in% opt$priorities_headers)) {
+        errors <- c(errors, paste0("Error: --priorities ", opt$priorities, " doesn't look like a feature priorities file. Expected a `Gene Type` column."))
       }
     }
     if(length(opt$harm) == 0) {
