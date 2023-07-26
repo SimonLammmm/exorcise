@@ -24,8 +24,9 @@
 # 0.9.7         2023-07-26T10-17-00   enable harmonisation and control reannotation with exorcised libraries
 # 0.9.7.1       2023-07-26T10-17-00   enable harmonisation and control reannotation with exorcised libraries
 # 0.9.8         2023-07-26T11-15-00   enable explicit non-harmonisation from pre-exorcised library
+# 0.9.8.1       2023-07-26T11-15-00   enable explicit non-harmonisation from pre-exorcised library
 
-ver <- "0.9.8"
+ver <- "0.9.8.1"
 
 #### INIT ####
 suppressWarnings(suppressMessages({
@@ -194,7 +195,7 @@ runPtgr <- function(blats) {
     
     
     fwrite(as.list(out$seqSpec), blats$file_genomic_seqSpecs, sep = "\n", col.names = F)
-    log_info("Verifying sequence of genome hits: ", run_command, " ...")
+    log_info("Verifying sequence of genome hits...")
     system(paste0("twoBitToFa ", blats$file_genome, " -seqList=", blats$file_genomic_seqSpecs, " ", blats$file_genomic_seqs))
     
     seq <- fread(blats$file_genomic_seqs, header = F)
