@@ -23,8 +23,9 @@
 # 0.9.6         2023-07-24T14-14-00   fix multiple control types behaviour
 # 0.9.7         2023-07-26T10-17-00   enable harmonisation and control reannotation with exorcised libraries
 # 0.9.7.1       2023-07-26T10-17-00   enable harmonisation and control reannotation with exorcised libraries
+# 0.9.8         2023-07-26T11-15-00   enable explicit non-harmonisation from pre-exorcised library
 
-ver <- "0.9.7.1"
+ver <- "0.9.8"
 
 #### INIT ####
 suppressWarnings(suppressMessages({
@@ -474,6 +475,7 @@ reannotateExisting <- function(opt) {
     exorcised <- exorcisemaster(exorcised, opt)
   } else {
     if("exo_harm" %in% names(library)) {
+      log_info("Inheriting existing harmonisations from the library...")
       library <- library %>% select(exo_id, exo_seq, exo_symbol, exo_harm, exo_orig, exo_target, exo_cut) %>% unique()   # harm not specified: inherit harmonisations if exist
     } else {
       library <- library %>% select(exo_id, exo_seq, exo_symbol, exo_target, exo_cut) %>% unique()
@@ -773,7 +775,7 @@ fixOpts <- function(opt) {
     if(length(opt$harm) == 0) {
       warnings <- c(warnings, paste0("Warning: --priorities passed without --harm. Ignoring."))
     }
-  } else if(length(opt$harm) > 0) {
+  } else if(length(opt$harm) > 0 & opt$harm != 0) {
     errors <- c(errors, paste0("Error: --priorities not passed while --harm passed."))
   }
   
@@ -850,17 +852,17 @@ fixOpts <- function(opt) {
 # Test vector
 if (interactive()) {
   opt <- list()
-  opt$infile <- "/Users/lam02/Downloads/Test1/test.tsv"
-  opt$outdir <- "/Users/lam02/Downloads/Test3/"
-  opt$seq <- "2"
-  opt$pam <- NULL
-  opt$genome <- "/Users/lam02/Downloads/hg38.2020-09-22.2bit"
-  opt$exome <- "/Users/lam02/Downloads/hg38.refseq.exons.tsv"
-  opt$priorities <- NULL
-  opt$harm <- NULL
-  opt$control <- NULL
+  opt$infile <-       NULL
+  opt$outdir <-       NULL
+  opt$seq <-          NULL
+  opt$pam <-          NULL
+  opt$genome <-       NULL
+  opt$exome <-        NULL
+  opt$priorities <-   NULL
+  opt$harm <-         NULL
+  opt$control <-      NULL
   opt$control_type <- NULL
-  opt$library <- NULL
+  opt$library <-      NULL
 }
 
 ## Execution
