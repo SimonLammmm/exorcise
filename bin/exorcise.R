@@ -27,8 +27,9 @@
 # 0.9.8.1       2023-07-26T11-15-00   enable explicit non-harmonisation from pre-exorcised library
 # 0.9.9         2023-07-26T14-37-00   switch to NCBI Dataset Gene downloadable feature priority lists
 # 0.9.9.1       2023-07-26T14-37-00   switch to NCBI Dataset Gene downloadable feature priority lists
+# 1.0           2023-07-28T10-50-00   tested full release
 
-ver <- "0.9.9.1"
+ver <- "1.0"
 
 #### INIT ####
 suppressWarnings(suppressMessages({
@@ -778,8 +779,10 @@ fixOpts <- function(opt) {
     if(length(opt$harm) == 0) {
       warnings <- c(warnings, paste0("Warning: --priorities passed without --harm. Ignoring."))
     }
-  } else if(length(opt$harm) > 0 & opt$harm != 0) {
-    errors <- c(errors, paste0("Error: --priorities not passed while --harm passed."))
+  } else if(length(opt$harm) > 0) {
+    if(opt$harm != 0) {
+      errors <- c(errors, paste0("Error: --priorities not passed while --harm passed."))
+    }
   }
   
   # check control
@@ -816,6 +819,25 @@ fixOpts <- function(opt) {
   } else if(length(opt$control) > 0) {
     opt$control_type <- paste0("Non-targeting", 1:length(opt$control))
     warnings <- c(warnings, paste0("Warning: --control passed without --control_type. Assuming --control_type for ", opt$control, " is ", opt$control_type, "."))
+  }
+  
+  # check ref
+  if(length(opt$ref) > 0) {
+    ref = paste0("
+exorcise version ", ver, " was developed by Dr Simon Lam, University of Cambridge
+https://github.com/SimonLammmm/exorcise
+                 
+If you found exorcise useful in your work, please cite:
+Lam S, exorcise [https://github.com/SimonLammmm/exorcise] (manuscript under preparation).
+
+If you used exorcise in ad-hoc mode, please cite:
+Kent WJ, 2002, BLAT--the BLAST-like alignment tool, Genome Res 12(4): 656-664, doi: 10.1101/gr.229202
+and the source of your genome assembly and exome annotations.
+                 
+======================================================================================================")
+    cat(ref, "\n\n")
+    options(show.error.messages = FALSE)
+    stop()
   }
   
   # remove temporary options
@@ -866,9 +888,38 @@ if (interactive()) {
   opt$control <-      NULL
   opt$control_type <- NULL
   opt$library <-      NULL
+  opt$ref <-          NULL
 }
 
 ## Execution
+logo <- "
+
+
+▓█████ ▒██   ██▒ ▒█████   ██▀███   ▄████▄   ██▓  ██████ ▓█████ 
+▓█   ▀ ▒▒ █ █ ▒░▒██▒  ██▒▓██ ▒ ██▒▒██▀ ▀█  ▓██▒▒██    ▒ ▓█   ▀ 
+▒███   ░░  █   ░▒██░  ██▒▓██ ░▄█ ▒▒▓█    ▄ ▒██▒░ ▓██▄   ▒███   
+▒▓█  ▄  ░ █ █ ▒ ▒██   ██░▒██▀▀█▄  ▒▓▓▄ ▄██▒░██░  ▒   ██▒▒▓█  ▄ 
+░▒████▒▒██▒ ▒██▒░ ████▓▒░░██▓ ▒██▒▒ ▓███▀ ░░██░▒██████▒▒░▒████▒
+░░ ▒░ ░▒▒ ░ ░▓ ░░ ▒░▒░▒░ ░ ▒▓ ░▒▓░░ ░▒ ▒  ░░▓  ▒ ▒▓▒ ▒ ░░░ ▒░ ░
+░ ░  ░░░   ░▒ ░  ░ ▒ ▒░   ░▒ ░ ▒░  ░  ▒    ▒ ░░ ░▒  ░ ░ ░ ░  ░
+░    ░    ░  ░ ░ ░ ▒    ░░   ░ ░         ▒ ░░  ░  ░     ░   
+░  ░ ░    ░      ░ ░     ░     ░ ░       ░        ░     ░  ░
+░                            
+
+
+                       VERSION"
+
+info <- "
+
+Author: Dr Simon Lam, University of Cambridge
+GitHub: https://github.com/SimonLammmm/exorcise
+
+======================================================================================================
+"
+
+
+cat(logo, ver, info, "\n\n")
+
 if (!interactive()) {
   
   option_list <- list(
@@ -897,7 +948,9 @@ if (!interactive()) {
     make_option(opt_str = c("-c", "--control"), type = "character", default = NULL,
                 help = "(optional) Pattern indicating a control guide (comma-separated list).", metavar = "character"),
     make_option(opt_str = c("-d", "--control_type"), type = "character", default = NULL,
-                help = "(optional) List of control guide types. Must be the same length as --control_strings (comma-separated list).", metavar = "character")
+                help = "(optional) List of control guide types. Must be the same length as --control_strings (comma-separated list).", metavar = "character"),
+    make_option(opt_str = c("--ref"), action = "store_true", default = NULL,
+                help = "Show citation and quit.", metavar = "character")
   )
   
   opt_parser = OptionParser(option_list = option_list)
@@ -920,10 +973,10 @@ log_info("cwd: ", getwd())
 command <- foreach(o = opt, .final = function(x) setNames(x, names(opt))) %do% { o }
 command <- paste0("--", names(opt), " ", command)
 command <- paste0(command, collapse = " ")
-log_info("Command: exorcise.R ", command)
+log_info("Command: exorcise ", command)
 
 # Call main loop
 reannotateLib(opt)
 end_time <- proc.time()
-log_info("exorcise process completed in ", (end_time - start_time)[[3]], " seconds.")
+log_info("exorcism took ", (end_time - start_time)[[3]], " seconds.")
 
