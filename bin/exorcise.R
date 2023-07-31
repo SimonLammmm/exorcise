@@ -31,8 +31,9 @@
 # 1.0.1         2023-07-31T11-00-00   improve handling i/o
 # 1.0.2         2023-07-31T11-45-00   warn on potentially incorrect checkpointed psl file
 # 1.0.2.1       2023-07-31T11-45-00   warn on potentially incorrect checkpointed psl file
+# 1.0.2.2       2023-07-31T11-45-00   warn on potentially incorrect checkpointed psl file
 
-ver <- "1.0.2.1"
+ver <- "1.0.2.2"
 
 #### INIT ####
 suppressWarnings(suppressMessages({
@@ -226,7 +227,7 @@ runPtgr <- function(blats) {
     nFoundByBlatNotInput <- length(which(!(unique(out$exo_seq) %in% unique(blatIn$seq))))
     nBlatIn <- length(unique(blatIn$seq))
     nFound <- length(unique(out$exo_seq))
-    nFoundByBlat <- nBlatIn - nFoundByBlatNotInput
+    nFoundByBlat <- nFound - nFoundByBlatNotInput
     
     
     log_info("BLAT aligned ", nFoundByBlat, " of ", nBlatIn, " sequences given.")
