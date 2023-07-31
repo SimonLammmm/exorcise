@@ -28,8 +28,10 @@
 # 0.9.9         2023-07-26T14-37-00   switch to NCBI Dataset Gene downloadable feature priority lists
 # 0.9.9.1       2023-07-26T14-37-00   switch to NCBI Dataset Gene downloadable feature priority lists
 # 1.0           2023-07-28T10-50-00   tested full release
+# 1.0.1         2023-07-31T11-00-00   improve handling i/o
+# 1.0.2         2023-07-31T11-45-00   warn on potentially incorrect checkpointed psl file
 
-ver <- "1.0"
+ver <- "1.0.2"
 
 #### INIT ####
 suppressWarnings(suppressMessages({
@@ -65,7 +67,7 @@ commasplit <- function(x) unlist(strsplit(x, ","))
 file.not.exist.or.zero <- function(x) !file.exists(Sys.glob(paste0(x, "*"))[1]) | file.exists(Sys.glob(paste0(x, "*"))[1]) & file.size(Sys.glob(paste0(x, "*"))[1]) == 0
 
 # fread with hanging glob
-fread <- function(x, ...) data.table::fread(file = Sys.glob(paste0(x, "*"))[1], ...)
+# fread <- function(x, ...) data.table::fread(file = Sys.glob(paste0(x, "*"))[1], ...)
 
 
 #### MAIN FUNCTION ####
@@ -96,9 +98,9 @@ reannotateLib <- function(opt) {
     # generate mapping
     genome_hits <- fread(blats$file_genomic_ranges, colClasses = "character") %>% transmute(exo_seq, exo_target, exo_cut)
     exome_hits <- fread(blats$file_genomic_ranges_matched, colClasses = "character") %>% transmute(exo_seq, exo_cut, exo_symbol) %>% unique()
-    all_mappings <- left_join(genome_hits, exome_hits, by = c("exo_seq", "exo_cut")) %>% unique()
+    all_mappings <- left_join(genome_hits, exome_hits, by = c("exo_seq", "exo_cut"), relationship = "many-to-many") %>% unique()
     
-    premaster <- left_join(authors, all_mappings, by = "exo_seq")
+    premaster <- left_join(authors, all_mappings, by = "exo_seq", relationship = "many-to-many")
     master <- exorcisemaster(premaster, opt)
     
     outfile_m_tsv <- blats$file_exorcise_master_out
@@ -202,8 +204,7 @@ runPtgr <- function(blats) {
     system(paste0("twoBitToFa ", blats$file_genome, " -seqList=", blats$file_genomic_seqSpecs, " ", blats$file_genomic_seqs))
     
     seq <- fread(blats$file_genomic_seqs, header = F)
-    seq <- tibble(seqSpec = seq %>% filter(grepl("^>", V1)) %>% mutate(V1 = sub("^>", "", V1)) %>% unlist(),
-                  exo_seq = seq %>% filter(!grepl("^>", V1)) %>% unlist())
+    seq <- tibble(exo_seq = seq %>% filter(!grepl("^>", V1)) %>% unlist())
     
     revcom <- function(x) {
       r <- foreach(i = x, .combine = "c") %do% {
@@ -216,6 +217,21 @@ runPtgr <- function(blats) {
     out <- out %>% mutate(exo_seq = seq$exo_seq,
                           exo_seq = case_when(strand == "+" ~ toupper(exo_seq),
                                               strand == "-" ~ revcom(exo_seq)))
+    
+    blatIn <- fread(blats$file_sgRNAs, header = F) %>%
+      filter(!grepl("^>", V1)) %>%
+      transmute(seq = sub(paste0(opt$pam, "$"), "", V1))
+    
+    nBlatIn <- length(unique(blatIn$seq))
+    nFound <- length(unique(out$exo_seq))
+    nFoundByBlat <- nBlatIn - nNotFoundByBlat
+    
+    nFoundByBlatNotInput <- length(which(!(unique(out$exo_seq) %in% unique(blatIn$seq))))
+    
+    log_info("BLAT aligned ", nFound, " of ", nBlatIn, " sequences given.")
+    if (nFoundByBlatNotInput > 0) {
+      log_warn("BLAT results ", blats$file_psl, " aligned ", nFoundByBlatNotInput," sequences that were not found in the infile. Did you checkpoint with the correct .psl file? Continuing.")
+    }
     
     dir.create(dirname(outfile), recursive = T, showWarnings = F)							
     fwrite(out, outfile, sep = "\t") 
@@ -540,12 +556,16 @@ fixOpts <- function(opt) {
     if(!file.exists(opt$infile)) {
       opt$infile_glob <- Sys.glob(paste0(opt$infile, "*"))
       if(length(opt$infile_glob) == 0) {
-        opt$infile <- NULL
         errors <- c(errors, paste0("Error: --infile ", opt$infile, " not found."))
+        opt$infile <- NULL
       } else {
         opt$infile <- opt$infile_glob
         warnings <- c(warnings, paste0("Warning: --infile accepted as globbed argument ", opt$infile, "."))
       }
+    }
+    if(!isFile(opt$infile)) {
+      errors <- c(errors, paste0("Error: --infile ", opt$infile, " is not a file."))
+      opt$infile <- NULL
     }
   } else {
     errors <- c(errors, paste0("Error: --infile not specified."))
@@ -553,7 +573,7 @@ fixOpts <- function(opt) {
   
   # check infile headers
   if(length(opt$infile) > 0) {
-    opt$infile_headers <- names(fread(opt, nrows = 0))
+    opt$infile_headers <- names(fread(opt$infile, nrows = 1))
     if (any(grepl("^exo_", opt$infile_headers))) {
       warnings <- c(warnings, paste0("Warning: --infile ", opt$infile, " contains exorcise-like column names (\"exo_\"). These might be clobbered."))
     }
@@ -824,17 +844,17 @@ fixOpts <- function(opt) {
   # check ref
   if(length(opt$ref) > 0) {
     ref = paste0("
-exorcise version ", ver, " was developed by Dr Simon Lam, University of Cambridge
-https://github.com/SimonLammmm/exorcise
-                 
-If you found exorcise useful in your work, please cite:
-Lam S, exorcise [https://github.com/SimonLammmm/exorcise] (manuscript under preparation).
+ exorcise version ", ver, " was developed by Dr Simon Lam, University of Cambridge
+ https://github.com/SimonLammmm/exorcise
 
-If you used exorcise in ad-hoc mode, please cite:
-Kent WJ, 2002, BLAT--the BLAST-like alignment tool, Genome Res 12(4): 656-664, doi: 10.1101/gr.229202
-and the source of your genome assembly and exome annotations.
-                 
-======================================================================================================")
+ If you found exorcise useful in your work, please cite:
+ Lam S, exorcise [https://github.com/SimonLammmm/exorcise] (manuscript under preparation).
+
+ If you used exorcise in ad-hoc mode, please cite:
+ Kent WJ, 2002, BLAT--the BLAST-like alignment tool, Genome Res 12(4): 656-664, doi: 10.1101/gr.229202
+ and the source of your genome assembly and exome annotations.
+
+=======================================================================================================")
     cat(ref, "\n\n")
     options(show.error.messages = FALSE)
     stop()
@@ -869,6 +889,10 @@ and the source of your genome assembly and exome annotations.
     }
   }
   
+  # if(length(warnings) > 0 & opt$just_go == F) {
+  #   readline(prompt = "Accept these settings? Press [enter] to continue.")
+  # }
+  
   return(opt)
 }
 
@@ -895,26 +919,26 @@ if (interactive()) {
 logo <- "
 
 
-▓█████ ▒██   ██▒ ▒█████   ██▀███   ▄████▄   ██▓  ██████ ▓█████ 
-▓█   ▀ ▒▒ █ █ ▒░▒██▒  ██▒▓██ ▒ ██▒▒██▀ ▀█  ▓██▒▒██    ▒ ▓█   ▀ 
-▒███   ░░  █   ░▒██░  ██▒▓██ ░▄█ ▒▒▓█    ▄ ▒██▒░ ▓██▄   ▒███   
-▒▓█  ▄  ░ █ █ ▒ ▒██   ██░▒██▀▀█▄  ▒▓▓▄ ▄██▒░██░  ▒   ██▒▒▓█  ▄ 
-░▒████▒▒██▒ ▒██▒░ ████▓▒░░██▓ ▒██▒▒ ▓███▀ ░░██░▒██████▒▒░▒████▒
-░░ ▒░ ░▒▒ ░ ░▓ ░░ ▒░▒░▒░ ░ ▒▓ ░▒▓░░ ░▒ ▒  ░░▓  ▒ ▒▓▒ ▒ ░░░ ▒░ ░
-░ ░  ░░░   ░▒ ░  ░ ▒ ▒░   ░▒ ░ ▒░  ░  ▒    ▒ ░░ ░▒  ░ ░ ░ ░  ░
-░    ░    ░  ░ ░ ░ ▒    ░░   ░ ░         ▒ ░░  ░  ░     ░   
-░  ░ ░    ░      ░ ░     ░     ░ ░       ░        ░     ░  ░
-░                            
+ ▓█████ ▒██   ██▒ ▒█████   ██▀███   ▄████▄   ██▓  ██████ ▓█████ 
+ ▓█   ▀ ▒▒ █ █ ▒░▒██▒  ██▒▓██ ▒ ██▒▒██▀ ▀█  ▓██▒▒██    ▒ ▓█   ▀ 
+ ▒███   ░░  █   ░▒██░  ██▒▓██ ░▄█ ▒▒▓█    ▄ ▒██▒░ ▓██▄   ▒███   
+ ▒▓█  ▄  ░ █ █ ▒ ▒██   ██░▒██▀▀█▄  ▒▓▓▄ ▄██▒░██░  ▒   ██▒▒▓█  ▄ 
+ ░▒████▒▒██▒ ▒██▒░ ████▓▒░░██▓ ▒██▒▒ ▓███▀ ░░██░▒██████▒▒░▒████▒
+ ░░ ▒░ ░▒▒ ░ ░▓ ░░ ▒░▒░▒░ ░ ▒▓ ░▒▓░░ ░▒ ▒  ░░▓  ▒ ▒▓▒ ▒ ░░░ ▒░ ░
+ ░ ░  ░░░   ░▒ ░  ░ ▒ ▒░   ░▒ ░ ▒░  ░  ▒    ▒ ░░ ░▒  ░ ░ ░ ░  ░
+ ░    ░    ░  ░ ░ ░ ▒    ░░   ░ ░         ▒ ░░  ░  ░     ░   
+ ░  ░ ░    ░      ░ ░     ░     ░ ░       ░        ░     ░  ░
+ ░                            
 
 
-                       VERSION"
+ VERSION"
 
 info <- "
 
-Author: Dr Simon Lam, University of Cambridge
-GitHub: https://github.com/SimonLammmm/exorcise
+ Author: Dr Simon Lam, University of Cambridge
+ GitHub: https://github.com/SimonLammmm/exorcise
 
-======================================================================================================
+================================================================
 "
 
 
@@ -932,7 +956,7 @@ if (!interactive()) {
     make_option(opt_str = c("-z", "--pam"), type = "character", default = NULL,
                 help = "(optional) PAM sequence.", metavar = "character"),
     # make_option(opt_str = c("-q", "--mode"), type = "character", default = NULL,
-    #             help = "CRISPR screen type: KO (knockout), a (activation), i (inhibition)", metavar = "character"),
+    #             help = "CRISPR screen type: KO (knockout), a (activation), i (inhibition), BE (base editing)", metavar = "character"),
     make_option(opt_str = c("-l", "--library"), type = "character", default = NULL,
                 help = "(required if --genome, --exome, and --priorities not specified) Exorcised file to be used as library.", metavar = "character"),
     make_option(opt_str = c("-v", "--genome"), type = "character", default = NULL,
@@ -949,6 +973,8 @@ if (!interactive()) {
                 help = "(optional) Pattern indicating a control guide (comma-separated list).", metavar = "character"),
     make_option(opt_str = c("-d", "--control_type"), type = "character", default = NULL,
                 help = "(optional) List of control guide types. Must be the same length as --control_strings (comma-separated list).", metavar = "character"),
+    # make_option(opt_str = c("-r", "--just_go"), action = "store", default = F,
+    #             help = "(optional) Execute without asking for confirmation.", metavar = "character"),
     make_option(opt_str = c("--ref"), action = "store_true", default = NULL,
                 help = "Show citation and quit.", metavar = "character")
   )
@@ -979,4 +1005,3 @@ log_info("Command: exorcise ", command)
 reannotateLib(opt)
 end_time <- proc.time()
 log_info("exorcism took ", (end_time - start_time)[[3]], " seconds.")
-
