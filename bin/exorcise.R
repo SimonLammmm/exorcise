@@ -32,8 +32,9 @@
 # 1.0.2         2023-07-31T11-45-00   warn on potentially incorrect checkpointed psl file
 # 1.0.2.1       2023-07-31T11-45-00   warn on potentially incorrect checkpointed psl file
 # 1.0.2.2       2023-07-31T11-45-00   warn on potentially incorrect checkpointed psl file
+# 1.0.2.3       2023-07-31T11-45-00   warn on potentially incorrect checkpointed psl file
 
-ver <- "1.0.2.2"
+ver <- "1.0.2.3"
 
 #### INIT ####
 suppressWarnings(suppressMessages({
@@ -224,15 +225,15 @@ runPtgr <- function(blats) {
       filter(!grepl("^>", V1)) %>%
       transmute(seq = sub(paste0(opt$pam, "$"), "", V1))
     
-    nFoundByBlatNotInput <- length(which(!(unique(out$exo_seq) %in% unique(blatIn$seq))))
+    nBoth <- length(which(unique(out$exo_seq) %in% unique(blatIn$seq)))
     nBlatIn <- length(unique(blatIn$seq))
-    nFound <- length(unique(out$exo_seq))
-    nFoundByBlat <- nFound - nFoundByBlatNotInput
+    nPsl <- length(unique(out$exo_seq))
+    nPslOnly <- nPsl - nBoth
     
     
-    log_info("BLAT aligned ", nFoundByBlat, " of ", nBlatIn, " sequences given.")
-    if (nFoundByBlatNotInput > 0) {
-      log_warn("BLAT results ", blats$file_psl, " aligned ", nFoundByBlatNotInput," sequences that were not found in the infile. Did you checkpoint with the correct .psl file? Continuing.")
+    log_info("BLAT aligned ", nBoth, " of ", nBlatIn, " sequences given.")
+    if (nPslOnly > 0) {
+      log_warn("BLAT results ", blats$file_psl, " aligned ", nPslOnly," sequences that were not found in the infile. Did you checkpoint with the correct .psl file? Continuing.")
     }
     
     dir.create(dirname(outfile), recursive = T, showWarnings = F)							
