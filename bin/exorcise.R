@@ -33,8 +33,9 @@
 # 1.0.2.1       2023-07-31T11-45-00   warn on potentially incorrect checkpointed psl file
 # 1.0.2.2       2023-07-31T11-45-00   warn on potentially incorrect checkpointed psl file
 # 1.0.2.3       2023-07-31T11-45-00   warn on potentially incorrect checkpointed psl file
+# 1.0.2.4       2023-09-24T15-07-11   enable support for exome files with comment headers
 
-ver <- "1.0.2.3"
+ver <- "1.0.2.4"
 
 #### INIT ####
 suppressWarnings(suppressMessages({
@@ -70,7 +71,7 @@ commasplit <- function(x) unlist(strsplit(x, ","))
 file.not.exist.or.zero <- function(x) !file.exists(Sys.glob(paste0(x, "*"))[1]) | file.exists(Sys.glob(paste0(x, "*"))[1]) & file.size(Sys.glob(paste0(x, "*"))[1]) == 0
 
 # fread with hanging glob
-# fread <- function(x, ...) data.table::fread(file = Sys.glob(paste0(x, "*"))[1], ...)
+fread <- function(x, ...) data.table::fread(file = Sys.glob(paste0(x, "*"))[1], ...)
 
 
 #### MAIN FUNCTION ####
@@ -282,7 +283,7 @@ exon_melter <- function(exons, exome_cols) {
 
 import_exome <- function(file_exons, exome_cols) {
   
-  exome <- fread(file_exons)
+  exome <- fread(file_exons, skip = "#chrom")
   if (any(grepl(",", exome[[exome_cols$start]]))) { # check if we need to melt exons
     exome <- exon_melter(exome, exome_cols)
   }
