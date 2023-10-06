@@ -34,8 +34,9 @@
 # 1.0.2.2       2023-07-31T11-45-00   warn on potentially incorrect checkpointed psl file
 # 1.0.2.3       2023-07-31T11-45-00   warn on potentially incorrect checkpointed psl file
 # 1.0.2.4       2023-09-24T15-07-11   enable support for exome files with comment headers
+# 1.0.2.5       2023-10-06T18:09:20   enable support for exome files with comment headers
 
-ver <- "1.0.2.4"
+ver <- "1.0.2.5"
 
 #### INIT ####
 suppressWarnings(suppressMessages({
@@ -715,7 +716,7 @@ fixOpts <- function(opt) {
       }
     }
     if(file.exists(opt$exome)) {
-      opt$exome_headers <- names(fread(opt$exome, nrows = 0))
+      opt$exome_headers <- names(fread(opt$exome, nrows = 0, skip = "#chrom"))
       if(!("#chrom" %in% opt$exome_headers)) {
         errors <- c(errors, paste0("Error: --exome ", opt$exome, " doesn't look like an exome. Expected a `#chrom` column."))
       }
