@@ -36,8 +36,9 @@
 # 1.0.2.4       2023-09-24T15-07-11   enable support for exome files with comment headers
 # 1.0.2.5       2023-10-06T18:09:20   enable support for exome files with comment headers
 # 1.0.2.6       2023-10-06T18:18:13   enable support for exome files with comment headers
+# 1.1           2023-10-11T23-48-30   add exo_id_harm to fix edge case where nonunique sequences specified
 
-ver <- "1.0.2.6"
+ver <- "1.1"
 
 #### INIT ####
 suppressWarnings(suppressMessages({
@@ -418,10 +419,13 @@ exorcisemaster <- function(premaster, opt) {
                                       T ~ exo_harm))
       }
     }
+
+    # Create a second ID column uniquely identifying harmonised sequences
+    master <- master %>% mutate(exo_id_harm = paste0("exorcise_", exo_seq, "_", exo_harm))
     
-    master <- master %>% relocate(exo_id, exo_seq, exo_symbol, exo_harm, exo_orig, exo_target, exo_cut)
+    master <- master %>% relocate(exo_id, exo_id_harm, exo_seq, exo_symbol, exo_harm, exo_orig, exo_target, exo_cut)
   } else {
-    master <- master %>% relocate(exo_id, exo_seq, exo_symbol, exo_target, exo_cut)
+    master <- master %>% relocate(exo_id, exo_id_harm, exo_seq, exo_symbol, exo_target, exo_cut)
   }
   
   master <- master %>% mutate(exo_id = paste0("exorcise_", exo_seq, "_", exo_target, "_", exo_symbol))
