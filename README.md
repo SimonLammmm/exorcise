@@ -74,8 +74,9 @@ The main exorcise output file is exorcise.tsv. Exorcise outputs are in columns s
 |     Column        |     Description                                                                    |
 |-------------------|------------------------------------------------------------------------------------|
 |     exo_id        |     Unique identifier for   this exorcise reannotation.                            |
+|     exo_id_harm   |     Unique identifier for   this exorcise harmonisation.                           |
 |     exo_seq       |     Sequence.                                                                      |
-|     exo_symbol    |     Sequence-level   annotation from exome.                                        |
+|     exo_symbol    |     Sequence-level   reannotation from exome.                                      |
 |     exo_harm      |     Group-level annotation   (harmonisation) from exome.                           |
 |     exo_orig      |     Original annotation.                                                           |
 |     exo_target    |     Genome coordinates of   alignment between sequence plus PAM and the genome.    |
