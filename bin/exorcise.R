@@ -37,8 +37,10 @@
 # 1.0.2.5       2023-10-06T18:09:20   enable support for exome files with comment headers
 # 1.0.2.6       2023-10-06T18:18:13   enable support for exome files with comment headers
 # 1.1           2023-10-11T23-48-30   add exo_id_harm to fix edge case where nonunique sequences specified
+# 1.2           2023-11-09T14:08:55   enforce stricter exome column naming according to UCSC Table Browser format
+# 1.2.1         2023-11-15T18:19:15   fix output columns in post-hoc exorcise
 
-ver <- "1.1"
+ver <- "1.2.1"
 
 #### INIT ####
 suppressWarnings(suppressMessages({
@@ -251,19 +253,19 @@ runPtgr <- function(blats) {
 
 # Convert genomic ranges to exon hits
 inferExomeCols <- function(file_exons) {
-  exome_headers <- fread(file_exons, nrows = 0, skip = "#chrom") %>% names() %>% tolower()
+  exome_headers <- fread(file_exons, nrows = 0, skip = "Starts") %>% names()
   exome_cols <- list()
   exome_cols$chr <- grep("chr|seqname", exome_headers)
-  exome_cols$start <- grep("start", exome_headers)
-  exome_cols$end <- grep("end", exome_headers)
+  exome_cols$start <- grep("exonStarts", exome_headers)
+  exome_cols$end <- grep("exonEnds", exome_headers)
   exome_cols$strand <- "*"                                                      # uncomment to search both strands (default)
   # exome_cols$strand <- grep("str", exome_headers)                             # uncomment to search sense strand only
-  exome_cols$symbol <- grep("symbol|name", exome_headers)
+  exome_cols$symbol <- grep("symbol|name2", exome_headers)
   return(exome_cols)
 }
 
 inferHitsCols <- function(file_genomic_ranges) {
-  hits_headers <- fread(file_genomic_ranges, nrows = 0) %>% names() %>% tolower()
+  hits_headers <- fread(file_genomic_ranges, nrows = 0) %>% names()
   hits_cols <- list()
   hits_cols$chr <- grep("chr|seqname", hits_headers)
   hits_cols$start <- grep("start", hits_headers)
@@ -286,7 +288,7 @@ exon_melter <- function(exons, exome_cols) {
 
 import_exome <- function(file_exons, exome_cols) {
   
-  exome <- fread(file_exons, skip = "#chrom")
+  exome <- fread(file_exons, skip = "Starts")
   if (any(grepl(",", exome[[exome_cols$start]]))) { # check if we need to melt exons
     exome <- exon_melter(exome, exome_cols)
   }
@@ -506,7 +508,7 @@ reannotateExisting <- function(opt) {
   } else {
     if("exo_harm" %in% names(library)) {
       log_info("Inheriting existing harmonisations from the library...")
-      library <- library %>% select(exo_id, exo_seq, exo_symbol, exo_harm, exo_orig, exo_target, exo_cut) %>% unique()   # harm not specified: inherit harmonisations if exist
+      library <- library %>% select(exo_id, exo_id_harm, exo_seq, exo_symbol, exo_harm, exo_orig, exo_target, exo_cut) %>% unique()   # harm not specified: inherit harmonisations if exist
     } else {
       library <- library %>% select(exo_id, exo_seq, exo_symbol, exo_target, exo_cut) %>% unique()
     }
@@ -514,7 +516,7 @@ reannotateExisting <- function(opt) {
   }
   
   if("exo_harm" %in% names(exorcised)) {
-    exorcised <- exorcised %>% relocate(exo_id, exo_seq, exo_symbol, exo_harm, exo_orig, exo_target, exo_cut)
+    exorcised <- exorcised %>% relocate(exo_id, exo_id_harm, exo_seq, exo_symbol, exo_harm, exo_orig, exo_target, exo_cut)
   } else {
     exorcised <- exorcised %>% relocate(exo_id, exo_seq, exo_symbol, exo_target, exo_cut)
   }
@@ -721,9 +723,9 @@ fixOpts <- function(opt) {
       }
     }
     if(file.exists(opt$exome)) {
-      opt$exome_headers <- names(fread(opt$exome, nrows = 0, skip = "#chrom"))
-      if(!("#chrom" %in% opt$exome_headers)) {
-        errors <- c(errors, paste0("Error: --exome ", opt$exome, " doesn't look like an exome. Expected a `#chrom` column."))
+      opt$exome_headers <- names(fread(opt$exome, nrows = 0, skip = "Starts"))
+      if(!(any(grepl("chrom", opt$exome_headers)))) {
+        errors <- c(errors, paste0("Error: --exome ", opt$exome, " doesn't look like an exome. Expected a `chrom` column."))
       }
       if(!("strand" %in% opt$exome_headers)) {
         errors <- c(errors, paste0("Error: --exome ", opt$exome, " doesn't look like an exome. Expected a `strand` column."))
