@@ -41,8 +41,9 @@
 # 1.2.1         2023-11-15T18:19:15   fix output columns in post-hoc exorcise
 # 1.3           2024-02-06T16:55:32   add CRISPRi/a support
 # 1.4           2024-02-06T22:19:34   speed up harmonisation by vectorising
+# 1.4.1         2024-02-07T10:38:30   speed up harmonisation by vectorising
 
-ver <- "1.4"
+ver <- "1.4.1"
 
 #### INIT ####
 suppressWarnings(suppressMessages({
@@ -310,9 +311,8 @@ import_exome <- function(opt, file_exons, exome_cols) {
   if(opt$mode == "a" | opt$mode == "i") { # If in CRISPRi/a mode,
     exome <- exome %>%
       group_by(seqnames, exo_symbol) %>% # enable matches within introns
-      summarise(seqnames, start = min(start) - 250, end = max(end) + 250, strand = "*", exo_symbol) %>% # enable upstream and downstream matches
-      unique() %>%
-      ungroup()
+      reframe(seqnames, start = min(start) - 250, end = max(end) + 250, strand = "*", exo_symbol) %>% # enable upstream and downstream matches
+      unique()
   }
   
   exome <- exome %>%
@@ -472,8 +472,8 @@ exorciseinferTargets <- function(master, opt) {
   # Harmonise
   simple <- simple_dup2 %>%
     group_by(exo_symbol, exo_orig, `Gene Type`) %>% # For each author's symbol
-    summarise(n = n()) %>%
-    ungroup(exo_symbol, `Gene Type`) %>%
+    reframe(n = n()) %>%
+    group_by(exo_orig) %>%
     filter(n == max(n)) %>% # Count candidate frequency and accept the most frequent
     filter(as.numeric(`Gene Type`) == min(as.numeric(`Gene Type`))) %>% # Of those remaining, accept the highest priority gene
     mutate(m = exo_symbol == exo_orig) %>%
@@ -684,6 +684,9 @@ fixOpts <- function(opt) {
     } else {
       opt$mode <- opt$mode_tolower
     }
+  } else {
+    opt$mode <- "ko"
+    warnings <- c(warnings, paste0("Info: --mode not specified. Using CRISPRko chemistry."))
   }
   
   # check genome
