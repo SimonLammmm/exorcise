@@ -39,8 +39,10 @@
 # 1.1           2023-10-11T23-48-30   add exo_id_harm to fix edge case where nonunique sequences specified
 # 1.2           2023-11-09T14:08:55   enforce stricter exome column naming according to UCSC Table Browser format
 # 1.2.1         2023-11-15T18:19:15   fix output columns in post-hoc exorcise
+# 1.3           2024-02-06T16:55:32   add CRISPRi/a support
+# 1.4           2024-02-06T22:19:34   speed up harmonisation by vectorising
 
-ver <- "1.2.1"
+ver <- "1.4"
 
 #### INIT ####
 suppressWarnings(suppressMessages({
@@ -102,7 +104,7 @@ reannotateLib <- function(opt) {
     extractGuides(opt, authors, blats)
     runBlat(opt, authors, blats)
     runPtgr(blats)
-    runGrtem(blats)
+    runGrtem(opt, blats)
     
     # generate mapping
     genome_hits <- fread(blats$file_genomic_ranges, colClasses = "character") %>% transmute(exo_seq, exo_target, exo_cut)
@@ -286,7 +288,7 @@ exon_melter <- function(exons, exome_cols) {
   return(exons)
 }
 
-import_exome <- function(file_exons, exome_cols) {
+import_exome <- function(opt, file_exons, exome_cols) {
   
   exome <- fread(file_exons, skip = "Starts")
   if (any(grepl(",", exome[[exome_cols$start]]))) { # check if we need to melt exons
@@ -303,9 +305,21 @@ import_exome <- function(file_exons, exome_cols) {
   symbol <- exome[[as.numeric(exome_cols$symbol)]] %>% gsub(pattern = ",$", replacement = "")
   
   exome <- tibble(seqnames = seqnames, start = start, end = end, strand = strand, exo_symbol = symbol) %>%
-    filter(!is.na(seqnames) & !is.na(start) & !is.na(end) & end >= start) %>%
+    filter(!is.na(seqnames) & !is.na(start) & !is.na(end) & end >= start)
+  
+  if(opt$mode == "a" | opt$mode == "i") { # If in CRISPRi/a mode,
+    exome <- exome %>%
+      group_by(seqnames, exo_symbol) %>% # enable matches within introns
+      summarise(seqnames, start = min(start) - 250, end = max(end) + 250, strand = "*", exo_symbol) %>% # enable upstream and downstream matches
+      unique() %>%
+      ungroup()
+  }
+  
+  exome <- exome %>%
     mutate(ranges = paste(start, end, sep = "-"))
+  
   exome <- GRanges(seqnames = exome$seqnames, ranges = exome$ranges, strand = exome$strand, exo_symbol = exome$exo_symbol)
+  
   return(exome)
 }
 
@@ -329,7 +343,7 @@ import_hits <- function(file_genomic_ranges, hits_cols) {
   return(hits)
 }
 
-runGrtem <- function(blats) {
+runGrtem <- function(opt, blats) {
   
   if(file.not.exist.or.zero(blats$file_genomic_ranges_matched) | file.not.exist.or.zero(blats$file_genomic_ranges_distances)) {
     log_info("Determining exonic hits... ", blats$file_exons, "...")
@@ -337,7 +351,7 @@ runGrtem <- function(blats) {
     exome_cols <- inferExomeCols(blats$file_exons)                         # Infer column identities in the exome file
     hits_cols <- inferHitsCols(blats$file_genomic_ranges)                  # Infer column identities in the hits file
     
-    exons <- import_exome(blats$file_exons, exome_cols)                    # Make a gRanges object from the exome file (with Symbol column to provide re-annotations)
+    exons <- import_exome(opt, blats$file_exons, exome_cols)                    # Make a gRanges object from the exome file (with Symbol column to provide re-annotations)
     hits <- import_hits(blats$file_genomic_ranges, hits_cols)              # Make a gRanges object from the hits file (with ID column indicating guides in the library to be reannotated)
     
     exon_hits <- suppressWarnings(findOverlaps(hits, exons))                  # Make a gRanges Hits object indicating the pairs of gRanges that overlap between query (hits) and subject (exome)
@@ -440,7 +454,7 @@ exorcisemaster <- function(premaster, opt) {
 exorciseinferTargets <- function(master, opt) {
   
   simple <- master %>%
-    dplyr::select(exo_symbol, exo_orig) %>% unique()
+    dplyr::select(exo_symbol, exo_orig, exo_seq) %>% unique() %>% dplyr::select(-exo_seq)
   
   # Load in gene symbol annotations for ranking. This file contains all possible approved symbols and gene classes
   annot <- fread(opt$priorities)
@@ -455,38 +469,20 @@ exorciseinferTargets <- function(master, opt) {
   
   simple_dup2 <- simple_dup %>% filter(!grepl(paste0(paste0("(^", c("X", opt$control_type), "\\d+$)"), collapse = "|"), exo_symbol)) # Remove controls and unmapped guides when considering intended target
   
-  dup <- unique(simple_dup2$exo_orig)
-  
-  # Fix multi-mapped original symbols
-  j <- 1
-  tot <- length(dup) 
-  log_info("Harmonising... ")
-  
-  simple_fixed <- data.table(exo_harm = rep("", tot),
-                             exo_orig = rep("", tot))        # Initialise a tibble to contain fixed, singly-mapped original symbols
-  
-  for (s in dup) {  
-    q <- simple_dup2 %>% filter(exo_orig == s)
-    cons <- q %>%                                                                         # Determine the candidates that appeared the most often
-      group_by(exo_symbol) %>%
-      summarise(consensus = n()) %>%
-      mutate(consensus = case_when(consensus == max(consensus) ~ 1,
-                                   T ~ 0))
-    q <- q %>% left_join(cons, by = "exo_symbol") %>% filter(consensus == 1)                  # Eliminate candidates which did not appear the most times
-    q <- q %>% mutate(fit_rank = case_when(exo_symbol == exo_orig ~ 0,                 # Rank remaining, tied 1st place candidates: identical names > protein-coding > ncRNA > pseudogene > others
-                                           T ~ as.numeric(`Gene Type`)))
-    accept <- q %>% filter(fit_rank == min(fit_rank)) %>% arrange(exo_symbol) %>% head(1)     # If the top rank is still tied, accept the first match alphabetically
-    set(simple_fixed, as.integer(j), "exo_harm", accept$exo_symbol[1])
-    set(simple_fixed, as.integer(j), "exo_orig", accept$exo_orig[1])
-    j <- j + 1
-    if(j %% 1000 == 0) {
-      log_info("Harmonising... ", j, " out of ", tot, " groups done...")
-    }
-  }
-  log_info("Harmonising... ", tot, " out of ", tot, " groups done.")
-  
-  # Combine
-  simple <- simple_fixed %>% unique()
+  # Harmonise
+  simple <- simple_dup2 %>%
+    group_by(exo_symbol, exo_orig, `Gene Type`) %>% # For each author's symbol
+    summarise(n = n()) %>%
+    ungroup(exo_symbol, `Gene Type`) %>%
+    filter(n == max(n)) %>% # Count candidate frequency and accept the most frequent
+    filter(as.numeric(`Gene Type`) == min(as.numeric(`Gene Type`))) %>% # Of those remaining, accept the highest priority gene
+    mutate(m = exo_symbol == exo_orig) %>%
+    filter(m == max(m)) %>% # Of those remaining, accept matching gene symbol with the authors', if any
+    arrange(exo_symbol) %>%
+    mutate(t = 1:n()) %>%
+    filter(t == min(t)) %>% # Of those remaining, accept the first lexicographical symbol
+    dplyr::transmute(exo_harm = exo_symbol, exo_orig) %>%
+    ungroup()
   
   return (simple)
   
@@ -676,17 +672,19 @@ fixOpts <- function(opt) {
   }
   
   # check mode
-  # if(length(opt$mode) > 0) {
-  #   if(length(opt$mode) > 1) {
-  #     opt$mode <- opt$mode[1]
-  #     warnings <- c(warnings, paste0("Warning: --mode received more than one argument. Using first value only: ", opt$mode, "."))
-  #   }
-  #   opt$mode <- toupper(opt$mode)
-  #   if(!(opt$mode %in% c("KO", "A", "I"))) {
-  #     warnings <- c(warnings, paste0("Warning: --mode received an invalid value: ", opt$mode, ". Falling back to KO."))
-  #     opt$mode <- "KO"
-  #   }
-  # }
+  if(length(opt$mode) > 0) {
+    if(length(opt$mode) > 1) {
+      opt$mode <- opt$mode[1]
+      warnings <- c(warnings, paste0("Warning: --mode received more than one argument. Using first value only: ", opt$mode, "."))
+    }
+    opt$mode_tolower <- tolower(opt$mode)
+    if(!(opt$mode_tolower %in% c("ko", "a", "i"))) {
+      warnings <- c(warnings, paste0("Warning: --mode received an invalid value: ", opt$mode, ". Falling back to KO."))
+      opt$mode <- "ko"
+    } else {
+      opt$mode <- opt$mode_tolower
+    }
+  }
   
   # check genome
   if(length(opt$genome) > 0) {
@@ -880,6 +878,7 @@ fixOpts <- function(opt) {
   opt$genome_glob <- NULL
   opt$exome_glob <- NULL
   opt$exome_headers <- NULL
+  opt$mode_tolower <- NULL
   opt$priorities_glob <- NULL
   opt$priorities_headers <- NULL
   
@@ -913,15 +912,16 @@ fixOpts <- function(opt) {
 # Test vector
 if (interactive()) {
   opt <- list()
-  opt$infile <-       NULL
-  opt$outdir <-       NULL
-  opt$seq <-          NULL
-  opt$pam <-          NULL
-  opt$genome <-       NULL
-  opt$exome <-        NULL
-  opt$priorities <-   NULL
-  opt$harm <-         NULL
-  opt$control <-      NULL
+  opt$infile <-       "/Users/lam02/Downloads/lncRNA_wg_mixed_no_dupes.2.tsv"
+  opt$outdir <-       "/Users/lam02/Downloads/"
+  opt$seq <-          "1"
+  opt$pam <-          "NGG"
+  opt$genome <-       "/Users/lam02/Library/CloudStorage/OneDrive-UniversityofCambridge/Projects/operation/exorcise/data/hg38.2020-09-22.2bit"
+  opt$exome <-        "/Users/lam02/Library/CloudStorage/OneDrive-UniversityofCambridge/Projects/operation/exorcise/data/hsa.grch38.refseqall.gz"
+  opt$priorities <-   "/Users/lam02/Library/CloudStorage/OneDrive-UniversityofCambridge/Projects/operation/exorcise/data/hsa.priorities.tsv.gz"
+  opt$mode <-         "i"
+  opt$harm <-         "3"
+  opt$control <-      "negative_control"
   opt$control_type <- NULL
   opt$library <-      NULL
   opt$ref <-          NULL
@@ -967,8 +967,8 @@ if (!interactive()) {
                 help = "Sequence column number.", metavar = "character"),
     make_option(opt_str = c("-z", "--pam"), type = "character", default = NULL,
                 help = "(optional) PAM sequence.", metavar = "character"),
-    # make_option(opt_str = c("-q", "--mode"), type = "character", default = NULL,
-    #             help = "CRISPR screen type: KO (knockout), a (activation), i (inhibition), BE (base editing)", metavar = "character"),
+    make_option(opt_str = c("-q", "--mode"), type = "character", default = NULL,
+                help = "(optional) CRISPR chemistry: ko (knockout [default]), a (activation), i (inhibition)", metavar = "character"),
     make_option(opt_str = c("-l", "--library"), type = "character", default = NULL,
                 help = "(required if --genome, --exome, and --priorities not specified) Exorcised file to be used as library.", metavar = "character"),
     make_option(opt_str = c("-v", "--genome"), type = "character", default = NULL,
