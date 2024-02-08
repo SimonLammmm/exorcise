@@ -42,8 +42,9 @@
 # 1.3           2024-02-06T16:55:32   add CRISPRi/a support
 # 1.4           2024-02-06T22:19:34   speed up harmonisation by vectorising
 # 1.4.1         2024-02-07T10:38:30   speed up harmonisation by vectorising
+# 1.4.2         2024-02-08T11:14:39   relax CRISPRi/a distance restraint, ignore genomic hits when seqnames not in exome
 
-ver <- "1.4.1"
+ver <- "1.4.2"
 
 #### INIT ####
 suppressWarnings(suppressMessages({
@@ -108,8 +109,11 @@ reannotateLib <- function(opt) {
     runGrtem(opt, blats)
     
     # generate mapping
-    genome_hits <- fread(blats$file_genomic_ranges, colClasses = "character") %>% transmute(exo_seq, exo_target, exo_cut)
-    exome_hits <- fread(blats$file_genomic_ranges_matched, colClasses = "character") %>% transmute(exo_seq, exo_cut, exo_symbol) %>% unique()
+    genome_hits <- fread(blats$file_genomic_ranges, colClasses = "character")
+    exome_hits <- fread(blats$file_genomic_ranges_matched, colClasses = "character")
+    genome_hits <- genome_hits %>% filter(seqnames %in% unique(exome_hits$seqnames)) # ignore genome hits in chromosomes/variants not in the exome
+    genome_hits <- genome_hits %>% transmute(exo_seq, exo_target, exo_cut)
+    exome_hits <- exome_hits %>% transmute(exo_seq, exo_cut, exo_symbol) %>% unique()
     all_mappings <- left_join(genome_hits, exome_hits, by = c("exo_seq", "exo_cut"), relationship = "many-to-many") %>% unique()
     
     premaster <- left_join(authors, all_mappings, by = "exo_seq", relationship = "many-to-many")
@@ -135,6 +139,7 @@ importAuthorsLib <- function(opt) {
   authors <- authors %>%                               # read authors' file
     as_tibble() %>%
     relocate(exo_id, exo_seq = opt$seq, exo_orig = opt$harm) %>%     # select appropriate columns
+    mutate(exo_seq = toupper(exo_seq)) %>%
     unique()
   return(authors)
 }
@@ -311,7 +316,7 @@ import_exome <- function(opt, file_exons, exome_cols) {
   if(opt$mode == "a" | opt$mode == "i") { # If in CRISPRi/a mode,
     exome <- exome %>%
       group_by(seqnames, exo_symbol) %>% # enable matches within introns
-      reframe(seqnames, start = min(start) - 250, end = max(end) + 250, strand = "*", exo_symbol) %>% # enable upstream and downstream matches
+      reframe(seqnames, start = min(start) - 500, end = max(end) + 500, strand = "*", exo_symbol) %>% # enable upstream and downstream matches
       unique()
   }
   
@@ -352,7 +357,7 @@ runGrtem <- function(opt, blats) {
     hits_cols <- inferHitsCols(blats$file_genomic_ranges)                  # Infer column identities in the hits file
     
     exons <- import_exome(opt, blats$file_exons, exome_cols)                    # Make a gRanges object from the exome file (with Symbol column to provide re-annotations)
-    hits <- import_hits(blats$file_genomic_ranges, hits_cols)              # Make a gRanges object from the hits file (with ID column indicating guides in the library to be reannotated)
+    hits <- import_hits(blats$file_genomic_ranges, hits_cols)                   # Make a gRanges object from the hits file (with ID column indicating guides in the library to be reannotated)
     
     exon_hits <- suppressWarnings(findOverlaps(hits, exons))                  # Make a gRanges Hits object indicating the pairs of gRanges that overlap between query (hits) and subject (exome)
     exon_hitsRanges <- suppressWarnings(findOverlapPairs(hits, exons))        # Make a gRanges Pairs object indicating the genomic ranges of pairs of gRanges that overlap between the first (hits) and second (exome)
@@ -421,6 +426,7 @@ exorcisemaster <- function(premaster, opt) {
   
   
   if ("exo_orig" %in% names(master)) {
+    log_info("Harmonising...")
     simple <- exorciseinferTargets(master, opt)
     master <- left_join(master, simple, by = "exo_orig") %>%
       mutate(exo_harm = case_when(is.na(exo_harm) ~ exo_symbol, # Accept harmonised symbol if found
