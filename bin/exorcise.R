@@ -43,8 +43,9 @@
 # 1.4           2024-02-06T22:19:34   speed up harmonisation by vectorising
 # 1.4.1         2024-02-07T10:38:30   speed up harmonisation by vectorising
 # 1.4.2         2024-02-08T11:14:39   relax CRISPRi/a distance restraint, ignore genomic hits when seqnames not in exome
+# 1.4.3         2024-02-09T10:38:17   add arbitrary CRISPR chemistry mode with user-input CRISPR effect range
 
-ver <- "1.4.2"
+ver <- "1.4.3"
 
 #### INIT ####
 suppressWarnings(suppressMessages({
@@ -313,10 +314,15 @@ import_exome <- function(opt, file_exons, exome_cols) {
   exome <- tibble(seqnames = seqnames, start = start, end = end, strand = strand, exo_symbol = symbol) %>%
     filter(!is.na(seqnames) & !is.na(start) & !is.na(end) & end >= start)
   
-  if(opt$mode == "a" | opt$mode == "i") { # If in CRISPRi/a mode,
+  if(opt$mode == "a" | opt$mode == "i") { # If in CRISPRi/a chemistry mode,
     exome <- exome %>%
-      group_by(seqnames, exo_symbol) %>% # enable matches within introns
-      reframe(seqnames, start = min(start) - 500, end = max(end) + 500, strand = "*", exo_symbol) %>% # enable upstream and downstream matches
+      group_by(seqnames, exo_symbol) %>%
+      reframe(seqnames, start = min(start) - 500, end = max(end) + 500, strand = "*", exo_symbol) %>% # enable upstream and downstream matches to default distance
+      unique()
+  } else if(is.numeric(opt$mode)) { # Else if in arbitrary chemistry mode,
+    exome <- exome %>%
+      group_by(seqnames, exo_symbol) %>% 
+      reframe(seqnames, start = min(start) - opt$mode, end = max(end) + opt$mode, strand = "*", exo_symbol) %>% # enable upstream and downstream matches to arbitrary distance
       unique()
   }
   
@@ -684,7 +690,9 @@ fixOpts <- function(opt) {
       warnings <- c(warnings, paste0("Warning: --mode received more than one argument. Using first value only: ", opt$mode, "."))
     }
     opt$mode_tolower <- tolower(opt$mode)
-    if(!(opt$mode_tolower %in% c("ko", "a", "i"))) {
+    if(grepl("^\\d+$", opt$mode)) {  # Arbitrary chemistry mode, accept hits this many positions from first/last exon bounds
+      opt$mode <- as.numeric(opt$mode)
+    } else if(!(opt$mode_tolower %in% c("ko", "a", "i"))) { # Standard chemistry modes
       warnings <- c(warnings, paste0("Warning: --mode received an invalid value: ", opt$mode, ". Falling back to KO."))
       opt$mode <- "ko"
     } else {
