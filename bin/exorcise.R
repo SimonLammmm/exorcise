@@ -44,8 +44,12 @@
 # 1.4.1         2024-02-07T10:38:30   speed up harmonisation by vectorising
 # 1.4.2         2024-02-08T11:14:39   relax CRISPRi/a distance restraint, ignore genomic hits when seqnames not in exome
 # 1.4.3         2024-02-09T10:38:17   add arbitrary CRISPR chemistry mode with user-input CRISPR effect range
+# 1.5           2024-03-01T15:04:12   add base editor mode
+# 1.5.1         2024-03-19T17:47:13   enable inheriting arbitrary columns in exome
+# 1.5.2         2024-04-29T13:06:59   add custom base editor mode
+# 1.5.3         2024-10-21T17:23:06   fix guide ids in BE mode
 
-ver <- "1.4.3"
+ver <- "1.5.3"
 
 #### INIT ####
 suppressWarnings(suppressMessages({
@@ -58,6 +62,10 @@ suppressWarnings(suppressMessages({
   library(logger)
   library(R.utils)
   library(GenomicRanges)
+  library(plyranges)
+  library(rtracklayer)
+  library(stringi)
+  library(Biostrings)
 }))
 
 options(scipen=999)
@@ -102,6 +110,7 @@ reannotateLib <- function(opt) {
                   file_genomic_seqs = paste0(opt$outdir, "/exorcise.3-", sub(".+/(.+?)$", "\\1", opt$genome), "_genomicSeqs.fa"),
                   file_genomic_ranges_matched = paste0(opt$outdir, "/exorcise.4-", sub(".+/(.+?)$", "\\1", opt$exome), "_exonHits.tsv"),
                   file_genomic_ranges_distances = paste0(opt$outdir, "/exorcise.5-", sub(".+/(.+?)$", "\\1", opt$exome), "_exonDist.tsv"),
+                  file_base_edited = paste0(opt$outdir, "/exorcise.6-", sub(".+/(.+?)$", "\\1", opt$exome), "_baseEdited.tsv"),
                   file_exorcise_master_out = paste0(opt$outdir, "/exorcise.tsv"))
     
     extractGuides(opt, authors, blats)
@@ -109,13 +118,21 @@ reannotateLib <- function(opt) {
     runPtgr(blats)
     runGrtem(opt, blats)
     
+    # Additional behaviour for base editing
+    if(opt$mode %in% c("cbe", "abe") | grepl("^be", opt$mode)) {
+      baseEdit(opt, blats)
+      exome_hits <- blats$file_base_edited
+    } else {
+      exome_hits <- blats$file_genomic_ranges_matched
+    }
+    
     # generate mapping
     genome_hits <- fread(blats$file_genomic_ranges, colClasses = "character")
-    exome_hits <- fread(blats$file_genomic_ranges_matched, colClasses = "character")
+    exome_hits <- fread(exome_hits, colClasses = "character")
     genome_hits <- genome_hits %>% filter(seqnames %in% unique(exome_hits$seqnames)) # ignore genome hits in chromosomes/variants not in the exome
     genome_hits <- genome_hits %>% transmute(exo_seq, exo_target, exo_cut)
-    exome_hits <- exome_hits %>% transmute(exo_seq, exo_cut, exo_symbol) %>% unique()
-    all_mappings <- left_join(genome_hits, exome_hits, by = c("exo_seq", "exo_cut"), relationship = "many-to-many") %>% unique()
+    #exome_hits <- exome_hits %>% transmute(exo_seq, exo_cut, exo_symbol) %>% unique()
+    all_mappings <- left_join(genome_hits, exome_hits, by = c("exo_seq", "exo_cut", "exo_target"), relationship = "many-to-many") %>% unique()
     
     premaster <- left_join(authors, all_mappings, by = "exo_seq", relationship = "many-to-many")
     master <- exorcisemaster(premaster, opt)
@@ -136,7 +153,7 @@ reannotateLib <- function(opt) {
 importAuthorsLib <- function(opt) {
   log_info("Opening file ", opt$infile, "...")
   authors <- fread(opt$infile)
-  authors <- authors %>% mutate(exo_id = paste0("exorcise_", 1:n()))
+  authors <- authors %>% mutate(exo_id = paste0("exorcise_", 1:dplyr::n()))
   authors <- authors %>%                               # read authors' file
     as_tibble() %>%
     relocate(exo_id, exo_seq = opt$seq, exo_orig = opt$harm) %>%     # select appropriate columns
@@ -184,7 +201,7 @@ runPtgr <- function(blats) {
     infile <- blats$file_psl
     outfile <- blats$file_genomic_ranges
     
-    psl <- suppressWarnings(fread(infile))
+    psl <- suppressWarnings(fread(infile, fill = T))
     if (nrow(psl) < 6) {
       log_error("No alignments found between ", opt$infile, " and ", opt$genome, ". Did you specify the correct --guide for the --infile? Did you specify the correct --genome? Quitting.")
       stop("FATAL: Quitting due to unrecoverable error.", call. = F)
@@ -270,6 +287,7 @@ inferExomeCols <- function(file_exons) {
   exome_cols$strand <- "*"                                                      # uncomment to search both strands (default)
   # exome_cols$strand <- grep("str", exome_headers)                             # uncomment to search sense strand only
   exome_cols$symbol <- grep("symbol|name2", exome_headers)
+  exome_cols$inherit <- grep("chr|seqname|exonStarts|exonEnds|str|symbol|name2|name$|cdsStart|cdsEnd|exonFrame|^ranges$|^seqlevels$|^seqlengths$|^isCircular$|^start$|^end$|^width$|^element$", exome_headers, value = T, invert = T)
   return(exome_cols)
 }
 
@@ -281,6 +299,7 @@ inferHitsCols <- function(file_genomic_ranges) {
   hits_cols$end <- grep("end", hits_headers)
   hits_cols$strand <- grep("str", hits_headers)
   hits_cols$exo_seq <- grep("^exo_seq$", hits_headers)
+  hits_cols$exo_target <- grep("^exo_target$", hits_headers)
   return(hits_cols)
 }
 
@@ -297,7 +316,7 @@ exon_melter <- function(exons, exome_cols) {
 
 import_exome <- function(opt, file_exons, exome_cols) {
   
-  exome <- fread(file_exons, skip = "Starts")
+  exome <- fread(file_exons, skip = "Start")
   if (any(grepl(",", exome[[exome_cols$start]]))) { # check if we need to melt exons
     exome <- exon_melter(exome, exome_cols)
   }
@@ -311,25 +330,25 @@ import_exome <- function(opt, file_exons, exome_cols) {
   }
   symbol <- exome[[as.numeric(exome_cols$symbol)]] %>% gsub(pattern = ",$", replacement = "")
   
-  exome <- tibble(seqnames = seqnames, start = start, end = end, strand = strand, exo_symbol = symbol) %>%
+  exome <- tibble(seqnames = seqnames, start = start, end = end, strand = strand, exo_symbol = symbol, exome[exome_cols$inherit]) %>%
     filter(!is.na(seqnames) & !is.na(start) & !is.na(end) & end >= start)
   
   if(opt$mode == "a" | opt$mode == "i") { # If in CRISPRi/a chemistry mode,
     exome <- exome %>%
-      group_by(seqnames, exo_symbol) %>%
+      group_by(seqnames, exo_symbol, exome[exome_cols$inherit]) %>%
       reframe(seqnames, start = min(start) - 500, end = max(end) + 500, strand = "*", exo_symbol) %>% # enable upstream and downstream matches to default distance
       unique()
   } else if(is.numeric(opt$mode)) { # Else if in arbitrary chemistry mode,
     exome <- exome %>%
-      group_by(seqnames, exo_symbol) %>% 
-      reframe(seqnames, start = min(start) - opt$mode, end = max(end) + opt$mode, strand = "*", exo_symbol) %>% # enable upstream and downstream matches to arbitrary distance
+      group_by(seqnames, exo_symbol, exome[exome_cols$inherit]) %>% 
+      reframe(seqnames, start = min(start) - as.numeric(opt$mode), end = max(end) + as.numeric(opt$mode), strand = "*", exo_symbol) %>% # enable upstream and downstream matches to arbitrary distance
       unique()
   }
   
   exome <- exome %>%
     mutate(ranges = paste(start, end, sep = "-"))
   
-  exome <- GRanges(seqnames = exome$seqnames, ranges = exome$ranges, strand = exome$strand, exo_symbol = exome$exo_symbol)
+  exome <- GRanges(seqnames = exome$seqnames, ranges = exome$ranges, strand = exome$strand, exo_symbol = exome$exo_symbol, exome[exome_cols$inherit])
   
   return(exome)
 }
@@ -341,16 +360,17 @@ import_hits <- function(file_genomic_ranges, hits_cols) {
   start <- hits[[as.numeric(hits_cols$start)]]
   end <- hits[[as.numeric(hits_cols$end)]]
   exo_seq = hits[[as.numeric(hits_cols$exo_seq)]]
+  exo_target = hits[[as.numeric(hits_cols$exo_target)]]
   if (hits_cols$strand == "*") {                    # use * if in strandless mode
     strand <- rep("*", nrow(hits))
   } else {
     strand <- hits[[as.numeric(hits_cols$strand)]]
   }
   
-  hits <- tibble(seqnames = seqnames, start = start, end = end, strand = strand, exo_seq = exo_seq) %>%
+  hits <- tibble(seqnames = seqnames, start = start, end = end, strand = strand, exo_seq = exo_seq, exo_target = exo_target) %>%
     filter(!is.na(seqnames) & !is.na(start) & !is.na(end) & end >= start) %>%
     mutate(ranges = paste(start, end, sep = "-"))
-  hits <- GRanges(seqnames = hits$seqnames, ranges = hits$ranges, strand = hits$strand, exo_seq = as.character(hits$exo_seq))
+  hits <- GRanges(seqnames = hits$seqnames, ranges = hits$ranges, strand = hits$strand, exo_seq = as.character(hits$exo_seq), exo_target = as.character(hits$exo_target))
   return(hits)
 }
 
@@ -367,9 +387,12 @@ runGrtem <- function(opt, blats) {
     
     exon_hits <- suppressWarnings(findOverlaps(hits, exons))                  # Make a gRanges Hits object indicating the pairs of gRanges that overlap between query (hits) and subject (exome)
     exon_hitsRanges <- suppressWarnings(findOverlapPairs(hits, exons))        # Make a gRanges Pairs object indicating the genomic ranges of pairs of gRanges that overlap between the first (hits) and second (exome)
+    inherit <- grep("chr|seqname|exonStarts|exonEnds|str|symbol|name2|name$|cdsStart|cdsEnd|exonFrame|^ranges$|^seqlevels$|^seqlengths$|^isCircular$|^start$|^end$|^width$|^element$", names(as_tibble(exons)), value = T, invert = T)
     sgrna_hits <- GRanges(exon_hitsRanges@first,                              # Make a gRanges object which contains the genomic ranges of the hits and the Symbols from the exome
                           exo_symbol = exons$exo_symbol[exon_hits@to],
-                          exo_seq = as.character(hits$exo_seq[exon_hits@from]))
+                          exo_seq = as.character(hits$exo_seq[exon_hits@from]),
+                          exo_target = as.character(hits$exo_target[exon_hits@from]),
+                          inherit = as_tibble(exons)[exon_hits@to, inherit])
     mapping <- as_tibble(sgrna_hits) %>%
       mutate(exo_cut = paste0(seqnames, ":", start)) %>%
       unique()
@@ -380,7 +403,9 @@ runGrtem <- function(opt, blats) {
     sgrna_distances <- GRanges(hits[distances@from],                          # Make a gRanges object annotated with the gene of the nearest exon and the distance to that exon
                                nearestGene = exons$exo_symbol[distances@to],
                                distance = distances@elementMetadata$distance,
-                               exo_seq = as.character(hits$exo_seq[distances@from]))
+                               exo_seq = as.character(hits$exo_seq[distances@from]),
+                               exo_target = as.character(hits$exo_target[distances@from]),
+                               inherit = as_tibble(exons)[distances@to, inherit])
     
     final_distances <- as_tibble(sgrna_distances) %>% 
       mutate(exo_cut = paste0(seqnames, ":", start)) %>%
@@ -396,6 +421,236 @@ runGrtem <- function(opt, blats) {
     log_info("Not recalculating exonic hits: results already exist, ", blats$file_genomic_ranges_matched, ".")
   }
   return()
+}
+
+# in silico base edit
+baseEdit <- function(opt, blats) {
+  
+  if(file.not.exist.or.zero(blats$file_base_edited)) {
+  # Determine base editing window ranges
+  mapping <- left_join(fread(blats$file_genomic_ranges_matched), fread(blats$file_genomic_ranges),
+                       by = c("seqnames", "start", "end", "strand", "exo_seq", "exo_cut", "assembly", "exo_target"))
+  mapping <- mapping %>%
+    mutate(be_window_start = case_when(strand == "+" ~ guideBegin + opt$be_window_from,
+                                       strand == "-" ~ guideFinal - opt$be_window_to),
+           be_window_end = case_when(strand == "+" ~ guideBegin + opt$be_window_to,
+                                     strand == "-" ~ guideFinal - opt$be_window_from))
+  
+  # Determine base editing window content
+  baseEdited <- mapping %>% filter(exo_target != "X")
+  baseEdited <- GRanges(seqnames = baseEdited$seqnames,
+                        ranges = IRanges(start = baseEdited$be_window_start,
+                                         end = baseEdited$be_window_end),
+                        strand = baseEdited$strand,
+                        exo_target = baseEdited$exo_target)
+  baseEdited$be_window_seq <- as.character(import.2bit(blats$file_genome, which = baseEdited))
+  baseEdited$be_window_seq <- sub("^.", "", baseEdited$be_window_seq) # fix to enforce zero-based half-open ranges
+  baseEdited$be_window_seq <- DNAStringSet(baseEdited$be_window_seq)
+  
+  # In silico base edit all possible edits per guide
+  baseEdited <- unique(baseEdited)
+  baseEdits <- tibble(
+    be_chr = as.character(baseEdited@seqnames),
+    exo_target = baseEdited$exo_target,
+    strand = as.character(baseEdited@strand),
+    start = baseEdited@ranges@start,
+    beWindowSeq = as.character(baseEdited$be_window_seq)) %>%
+    group_by(exo_target, strand, beWindowSeq) %>%
+    reframe(
+      be_chr, exo_target, strand, beWindowSeq,
+      be_position = case_when(strand == "+" ~ stri_locate_all(beWindowSeq, fixed = opt$be_from[1]),   # find be position relative to window
+                              strand == "-" ~ stri_locate_all(beWindowSeq, fixed = opt$be_from[2])),
+      be_position = be_position[[1]][,1],
+      be_original = substr(beWindowSeq, be_position, be_position),
+      be_mutation = case_when(be_original == opt$be_from[1] ~ opt$be_to[1],
+                              be_original == opt$be_from[2] ~ opt$be_to[2]),
+      be_position = be_position + start - 1 # find be position relative to chromosome
+    )
+  baseEdits <- baseEdits %>% filter(!is.na(be_position))
+  baseEdits2 <- GRanges(seqnames = baseEdits$be_chr,
+                        ranges = IRanges(start = baseEdits$be_position,
+                                         end = baseEdits$be_position+1),
+                        strand = baseEdits$strand,
+                        exo_target = baseEdits$exo_target,
+                        be_original = baseEdits$be_original,
+                        be_mutation = baseEdits$be_mutation)
+  
+  
+  
+  #### In silico splice the entire genome to find CDSs ####
+  
+  # Obtain all exons in the exome
+  exome <- fread(opt$exome, skip = "Starts")
+  names(exome) <- sub("^#", "", names(exome))
+  colExonStarts <- grep("exonStarts", names(exome), value = T)
+  colExonEnds <- grep("exonEnds", names(exome), value = T)
+  colExonFrame <- grep("exonFrame", names(exome), value = T)
+  colExonChrom <- grep("chrom", names(exome), value = T)
+  colExonStrand <- grep("strand", names(exome), value = T)
+  colCdsStart <- grep("cdsStart", names(exome), value = T)
+  colCdsEnd <- grep("cdsEnd", names(exome), value = T)
+  colName <- grep("name$", names(exome), value = T)
+  colName2 <- grep("name2", names(exome), value = T)
+  inherit <- grep("chr|seqname|exonStarts|exonEnds|str|symbol|name2|name$|cdsStart|cdsEnd|exonFrame|^ranges$|^seqlevels$|^seqlengths$|^isCircular$|^start$|^end$|^width$|^element$", names(as_tibble(exome)), value = T, invert = T)
+  exome <- exome %>%
+    separate_longer_delim(cols = all_of(c(colExonStarts, colExonEnds, colExonFrame)), delim = ",")
+  exome <- exome %>%
+    filter(exome[[colExonFrame]] != "")
+  exons <- GRanges(seqnames = exome[[colExonChrom]],
+                   ranges = IRanges(start = as.numeric(exome[[colExonStarts]]),
+                                    end = as.numeric(exome[[colExonEnds]])),
+                   strand = exome[[colExonStrand]],
+                   cdsStart = exome[[colCdsStart]],
+                   cdsEnd = exome[[colCdsEnd]],
+                   transcript = exome[[colName]],
+                   name2 = exome[[colName2]],
+                   exonFrames = exome[[colExonFrame]],
+                   exome[inherit])
+  
+  # Obtain all CDSs in the genome
+  cdss <- GRanges(seqnames = exome[[colExonChrom]],
+                  ranges = IRanges(start = exome[[colCdsStart]],
+                                   end = exome[[colCdsEnd]]),
+                  strand = exome[[colExonStrand]],
+                  transcript = exome[[colName]],
+                  name2 = exome[[colName2]])
+  
+  # In silico splice
+  spliced <- pintersect(exons, cdss)
+  
+  # Determine transcripts within base editing windows of any guide
+  idxExomeTranscriptsAffects <- findOverlaps(baseEdited, exons, ignore.strand = T)
+  transcriptsAffected <- unique(exons$transcript[idxExomeTranscriptsAffects@to])
+  
+  
+  # Filter CDS bounds for those affected by guides
+  spliced <- spliced %>% filter(transcript %in% transcriptsAffected)
+  
+  # Obtain CDSs
+  spliced$cds <- as.character(import.2bit(opt$genome, which = spliced))
+  spliced$cds <- sub("^.", "", spliced$cds)
+  spliced$cds <- DNAStringSet(spliced$cds)
+  
+  # Attach library base edits to spliced exons
+  splicedBaseEdits <- findOverlaps(baseEdits2, spliced, ignore.strand = T)
+  splicedBaseEdits2 <- tibble(
+    exo_target = baseEdits2$exo_target[splicedBaseEdits@from],
+    be_original = baseEdits2$be_original[splicedBaseEdits@from],
+    be_mutation = baseEdits2$be_mutation[splicedBaseEdits@from],
+    be_chr = as.character(baseEdits2@seqnames)[splicedBaseEdits@from],
+    be_strand = as.character(baseEdits2@strand)[splicedBaseEdits@from],
+    be_position = baseEdits2@ranges@start[splicedBaseEdits@from],
+    transcript = spliced$transcript[splicedBaseEdits@to],
+    strand = as.character(spliced@strand)[splicedBaseEdits@to],
+    name2 = spliced$name2[splicedBaseEdits@to],
+    exonFrame = spliced$exonFrames[splicedBaseEdits@to],
+    exonStart = spliced@ranges@start[splicedBaseEdits@to],
+    exonEnd = spliced@ranges@start[splicedBaseEdits@to] + spliced@ranges@width[splicedBaseEdits@to] - 1,
+    cds = as.character(spliced$cds[splicedBaseEdits@to]),
+    inherit = as_tibble(spliced)[splicedBaseEdits@to, inherit]
+  )
+  splicedBaseEdits2 <- splicedBaseEdits2 %>%
+    mutate(be_relative_position_in_exon = be_position - exonStart) %>%
+    filter(be_relative_position_in_exon >= 0) %>% # remove boundary edits outside of exon (upstream)
+    filter(be_relative_position_in_exon < exonEnd - exonStart) # remove boundary edits outside of exon (downstream)
+  substr(splicedBaseEdits2$cds, splicedBaseEdits2$be_relative_position_in_exon + 1, splicedBaseEdits2$be_relative_position_in_exon + 1) <- splicedBaseEdits2$be_mutation
+  splicedBaseEdits2 <- splicedBaseEdits2 %>%
+    filter(cds != "")
+  
+  
+  #### Determine base editing consequences per base edit ####
+  
+  # Convert exon-relative position to CDS-relative position
+  spliced <- spliced %>%
+    as_tibble() %>%
+    filter(hit == T & exonFrames != -1) %>% # remove ranges not corresponding to CDS
+    group_by(transcript) %>%
+    arrange(start) %>%
+    # Calculate number of positions before each exon's start position
+    mutate(widthBefore = c(0, cumsum(width - 1))[1:dplyr::n()]) %>% # enforce zero-based
+    mutate(widthBefore = case_when(widthBefore == -1 ~ 0,
+                                   T ~ widthBefore)) %>%
+    ungroup()
+  
+  # Convert exon-relative base editing positions to CDS-relative base editing positions
+  splicedBaseEdits2 <- splicedBaseEdits2 %>%
+    left_join(spliced %>% as_tibble() %>% transmute(exonStart = start, transcript, widthBefore), by = c("exonStart", "transcript")) %>%
+    mutate(be_relative_position_in_cds = be_relative_position_in_exon + widthBefore)
+  
+  # Assemble full-length transcripts without base editing
+  spliced2 <- tibble(
+    transcript = spliced$transcript,
+    name2 = spliced$name2,
+    strand = as.character(spliced$strand),
+    cds = as.character(spliced$cds),
+    exonStart = spliced$start
+  ) %>%
+    group_by(transcript, name2, strand) %>%
+    arrange(exonStart) %>%
+    summarise(flseq = paste0(cds, collapse = "")) %>%
+    ungroup()
+  
+  # In silico base edit
+  splicedBaseEdits3 <- splicedBaseEdits2 %>%
+    #transmute(exo_target, be_original, be_mutation, be_chr, be_strand, be_position, transcript, strand, name2, be_relative_position_in_cds) %>%
+    left_join(spliced2, by = c("transcript", "name2", "strand")) %>%
+    filter(be_relative_position_in_cds < nchar(flseq)) # remove base edits 1nt outside of exon bounds
+  splicedBaseEdits3$be_flseq <- splicedBaseEdits3$flseq
+  substr(splicedBaseEdits3$be_flseq, splicedBaseEdits3$be_relative_position_in_cds+1, splicedBaseEdits3$be_relative_position_in_cds+1) <- splicedBaseEdits3$be_mutation
+  
+  # Reverse complement sequences on the minus strand and in silico translate
+  # Unedited sequences
+  spliced2 <- spliced2 %>%
+    mutate(flseq = case_when(strand == "+" ~ flseq,
+                             strand == "-" ~ chartr("ATCG", "TAGC", stri_reverse(flseq)))) %>%
+    mutate(translated = as.character(translate(DNAStringSet(flseq))))
+  
+  # Base edited sequences
+  splicedBaseEdits3 <- splicedBaseEdits3 %>%
+    mutate(flseq = case_when(strand == "+" ~ flseq,
+                             strand == "-" ~ chartr("ATCG", "TAGC", stri_reverse(flseq))),
+           be_flseq = case_when(strand == "+" ~ be_flseq,
+                                strand == "-" ~ chartr("ATCG", "TAGC", stri_reverse(be_flseq)))) %>%
+    # In silico translate
+    mutate(be_translated = as.character(translate(DNAStringSet(be_flseq))),
+           be_position_in_aa = case_when(strand == "+" ~ floor(be_relative_position_in_cds / 3) + 1,
+                                         strand == "-" ~ floor((nchar(be_flseq) - 1 - be_relative_position_in_cds) / 3 + 1)),# AA sequences are ONE-based, NOT ZERO-BASED
+           be_modified_in_aa = substr(be_translated, be_position_in_aa, be_position_in_aa))
+  
+  
+  splicedBaseEdits3 <- splicedBaseEdits3 %>%
+    rowwise() %>%
+    mutate(be_original_in_aa = substr(spliced2$translated[spliced2$transcript == transcript], be_position_in_aa, be_position_in_aa),
+           ntMutationDesc = case_when(strand == "+" ~ paste0(be_original, be_relative_position_in_cds+1, be_mutation),
+                                      strand == "-" ~ paste0(chartr("ATCG", "TAGC", be_original), nchar(be_flseq)-be_relative_position_in_cds, chartr("ATCG", "TAGC", be_mutation))),
+           aaMutationDesc = paste0(be_original_in_aa, be_position_in_aa, be_modified_in_aa)) %>%
+    ungroup()
+  
+  splicedBaseEdits3 <- splicedBaseEdits3 %>%
+    mutate(be_consequence = case_when(be_original_in_aa == be_modified_in_aa ~ "synonymous",
+                                      be_modified_in_aa == "*" & be_original != "*" ~ "stopgain",
+                                      be_modified_in_aa != "*" & be_original == "*" ~ "stoploss",
+                                      be_modified_in_aa != be_original_in_aa ~ "missense"))
+  
+  #### Summarise final base editing results ####
+  
+  result <- left_join(
+    #x = (mapping %>% transmute(seqnames, start, end, width, strand, exo_symbol, exo_seq, exo_cut, assembly, exome, exo_target) %>% unique()),
+    x = mapping %>% unique(),
+    y = (splicedBaseEdits3 %>% transmute(exo_target, transcript, transcript_strand = strand,
+                                         be_position_in_grch38 = paste0(be_chr, ":", be_position, "-", be_position+1),
+                                         be_nt_mutation = ntMutationDesc, be_aa_mutation = aaMutationDesc, be_consequence)),
+    by = "exo_target",
+    relationship = "many-to-many"
+  ) %>%
+    mutate(exo_be = paste0(exo_symbol, ":", be_aa_mutation)) %>% # Add mutation summary column
+    unique()
+  
+  #### To disk
+  fwrite(result, blats$file_base_edited, sep = "\t")
+  } else {
+    log_info("Not recalculating base edits: results already exist, ", blats$file_base_edited, ".")
+  }
 }
 
 # Write master mapping file
@@ -443,20 +698,33 @@ exorcisemaster <- function(premaster, opt) {
         thisControlPattern <- opt$control[i]
         thisControlType <- opt$control_type[i]
         master <- master %>%
-          mutate(exo_harm = case_when(grepl(thisControlPattern, exo_orig) ~ paste0(thisControlType, "_", 1:n()),
+          mutate(exo_harm = case_when(grepl(thisControlPattern, exo_orig) ~ paste0(thisControlType, "_", 1:dplyr::n()),
                                       T ~ exo_harm))
       }
     }
-
+    
     # Create a second ID column uniquely identifying harmonised sequences
     master <- master %>% mutate(exo_id_harm = paste0("exorcise_", exo_seq, "_", exo_harm))
     
+    if(opt$mode %in% c("cbe", "abe") | grepl("^be", opt$mode)) {
+      master <- master %>%
+        mutate(exo_id_harm = paste0(exo_id_harm, ":", be_aa_mutation),
+               exo_be_harm = paste0(exo_harm, ":", be_aa_mutation)) # Add harmonised mutation summary column if using BE mode
+    }
+    
     master <- master %>% relocate(exo_id, exo_id_harm, exo_seq, exo_symbol, exo_harm, exo_orig, exo_target, exo_cut)
   } else {
-    master <- master %>% relocate(exo_id, exo_id_harm, exo_seq, exo_symbol, exo_target, exo_cut)
+    
+  # If not harmonise
+    master <- master %>% relocate(exo_id, exo_seq, exo_symbol, exo_target, exo_cut)
   }
   
+  # Finalise
   master <- master %>% mutate(exo_id = paste0("exorcise_", exo_seq, "_", exo_target, "_", exo_symbol))
+  
+  if(opt$mode %in% c("cbe", "abe") | grepl("^be", opt$mode)) {
+    master <- master %>% mutate(exo_id = paste0(exo_id, ":", be_aa_mutation)) # Add mutation if using BE mode
+  }
   
   
   return(master)
@@ -466,7 +734,7 @@ exorcisemaster <- function(premaster, opt) {
 exorciseinferTargets <- function(master, opt) {
   
   simple <- master %>%
-    dplyr::select(exo_symbol, exo_orig, exo_seq) %>% unique() %>% dplyr::select(-exo_seq)
+    dplyr::select(exo_symbol, exo_orig, exo_seq, matches("^inherit")) %>% unique() %>% dplyr::select(-exo_seq)
   
   # Load in gene symbol annotations for ranking. This file contains all possible approved symbols and gene classes
   annot <- fread(opt$priorities)
@@ -476,7 +744,7 @@ exorciseinferTargets <- function(master, opt) {
   # Infer
   
   simple_dup <- simple %>%
-    left_join(annot, by = c("exo_symbol" = "Symbol"))                  # Join the multi-mapped original symbols to annotations for their mapping target
+    left_join(annot, by = c("exo_symbol" = "Symbol"), relationship = "many-to-many")                  # Join the multi-mapped original symbols to annotations for their mapping target
   simple_dup$`Gene Type`[which(is.na(simple_dup$`Gene Type`))] <- "OTHER"
   
   simple_dup2 <- simple_dup %>% filter(!grepl(paste0(paste0("(^", c("X", opt$control_type), "\\d+$)"), collapse = "|"), exo_symbol)) # Remove controls and unmapped guides when considering intended target
@@ -484,17 +752,23 @@ exorciseinferTargets <- function(master, opt) {
   # Harmonise
   simple <- simple_dup2 %>%
     group_by(exo_symbol, exo_orig, `Gene Type`) %>% # For each author's symbol
-    reframe(n = n()) %>%
+    reframe(n = dplyr::n()) %>%
     group_by(exo_orig) %>%
     filter(n == max(n)) %>% # Count candidate frequency and accept the most frequent
     filter(as.numeric(`Gene Type`) == min(as.numeric(`Gene Type`))) %>% # Of those remaining, accept the highest priority gene
     mutate(m = exo_symbol == exo_orig) %>%
     filter(m == max(m)) %>% # Of those remaining, accept matching gene symbol with the authors', if any
     arrange(exo_symbol) %>%
-    mutate(t = 1:n()) %>%
+    mutate(t = 1:dplyr::n()) %>%
     filter(t == min(t)) %>% # Of those remaining, accept the first lexicographical symbol
-    dplyr::transmute(exo_harm = exo_symbol, exo_orig) %>%
+    dplyr::select(exo_harm = exo_symbol, exo_orig) %>%
     ungroup()
+  
+  if(any(grepl("^inherit", names(simple_dup2)))) {
+    simple <- simple %>%
+      left_join(simple_dup2 %>% select(exo_symbol, matches("^inherit")), by = c("exo_harm" = "exo_symbol"), relationship = "many-to-many") %>% unique()
+    names(simple)[grep("^inherit", names(simple))] <- paste0("exo_harm.", names(simple)[grep("^inherit", names(simple))])
+  }
   
   return (simple)
   
@@ -692,11 +966,42 @@ fixOpts <- function(opt) {
     opt$mode_tolower <- tolower(opt$mode)
     if(grepl("^\\d+$", opt$mode)) {  # Arbitrary chemistry mode, accept hits this many positions from first/last exon bounds
       opt$mode <- as.numeric(opt$mode)
-    } else if(!(opt$mode_tolower %in% c("ko", "a", "i"))) { # Standard chemistry modes
+    } else if(!(opt$mode_tolower %in% c("ko", "a", "i", "cbe", "abe")) & !(grepl("^be", opt$mode_tolower))) { # Standard chemistry modes
       warnings <- c(warnings, paste0("Warning: --mode received an invalid value: ", opt$mode, ". Falling back to KO."))
       opt$mode <- "ko"
     } else {
       opt$mode <- opt$mode_tolower
+      if (opt$mode == "cbe") { # Apply cytosine base editor settings
+        opt$be_window_from = 2
+        opt$be_window_to = 8
+        opt$be_from = c("C", "G") # C on the forward strand, G on the reverse strand
+        opt$be_to = c("T", "A")
+      } else if (opt$mode == "abe") { # Apply adenine base editor settings
+        opt$be_window_from = 4
+        opt$be_window_to = 9
+        opt$be_from = c("A", "T") # A on the forward strand, T on the reverse strand
+        opt$be_to = c("G", "C")
+      } else if (grepl("^be", opt$mode)) { # Check and apply custom base editor settings
+        if (toupper(substr(opt$mode, 3, 3)) %in% c("A", "C", "G", "T") &
+            toupper(substr(opt$mode, 4, 4)) %in% c("A", "C", "G", "T") &
+            grepl("\\d{2}", substr(opt$mode, 5, 6)) &
+            grepl("\\d{2}", substr(opt$mode, 7, 8))
+        ) {
+          opt$be_from = toupper(substr(opt$mode, 3, 3))
+          opt$be_to = toupper(substr(opt$mode, 4, 4))
+          opt$be_from = c(opt$be_from, chartr("ACGT", "TGCA", opt$be_from))
+          opt$be_to = c(opt$be_to, chartr("ACGT", "TGCA", opt$be_to))
+          opt$be_window_from = as.numeric(substr(opt$mode, 5, 6))
+          opt$be_window_to = as.numeric(substr(opt$mode, 7, 8))
+          log_info("Applying custom BE settings: original ", opt$be_from[1], "; edit ", opt$be_to[1], "; window start ", opt$be_window_from, "; window end ", opt$be_window_end, ".")
+        } else { # Fall back to CBE if fail
+          warnings <- c(warnings, paste0("Warning: --mode received an invalid value: ", opt$mode, ". Falling back to CBE"))
+          opt$be_window_from = 2
+          opt$be_window_to = 8
+          opt$be_from = c("C", "G") # C on the forward strand, G on the reverse strand
+          opt$be_to = c("T", "A")
+        }
+      }
     }
   } else {
     opt$mode <- "ko"
@@ -742,17 +1047,28 @@ fixOpts <- function(opt) {
       if(!(any(grepl("chrom", opt$exome_headers)))) {
         errors <- c(errors, paste0("Error: --exome ", opt$exome, " doesn't look like an exome. Expected a `chrom` column."))
       }
-      if(!("strand" %in% opt$exome_headers)) {
+      if(!(any(grepl("strand", opt$exome_headers)))) {
         errors <- c(errors, paste0("Error: --exome ", opt$exome, " doesn't look like an exome. Expected a `strand` column."))
       }
-      if(!("exonStarts" %in% opt$exome_headers)) {
+      if(!(any(grepl("exonStarts", opt$exome_headers)))) {
         errors <- c(errors, paste0("Error: --exome ", opt$exome, " doesn't look like an exome. Expected an `exonStarts` column."))
       }
-      if(!("exonEnds" %in% opt$exome_headers)) {
+      if(!(any(grepl("exonEnds", opt$exome_headers)))) {
         errors <- c(errors, paste0("Error: --exome ", opt$exome, " doesn't look like an exome. Expected an `exonEnds` column."))
       }
-      if(!("name2" %in% opt$exome_headers)) {
+      if(!(any(grepl("name2", opt$exome_headers)))) {
         errors <- c(errors, paste0("Error: --exome ", opt$exome, " doesn't look like an exome. Expected a `name2` column."))
+      }
+      if(opt$mode %in% c("cbe", "abe") | grepl("^be", opt$mode)) {
+        if(!(any(grepl("name$", opt$exome_headers)))) {
+          errors <- c(errors, paste0("Error: --exome ", opt$exome, " is invalid while in ,", opt$mode, " mode. Expected a `name` column."))
+        }
+        if(!(any(grepl("cdsStart", opt$exome_headers)))) {
+          errors <- c(errors, paste0("Error: --exome ", opt$exome, " is invalid while in ,", opt$mode, " mode. Expected a `cdsStart` column."))
+        }
+        if(!(any(grepl("cdsEnd", opt$exome_headers)))) {
+          errors <- c(errors, paste0("Error: --exome ", opt$exome, " is invalid while in ,", opt$mode, " mode. Expected a `cdsEnd` column."))
+        }
       }
     }
   } else if(opt$adhoc) {
@@ -929,16 +1245,16 @@ fixOpts <- function(opt) {
 # Test vector
 if (interactive()) {
   opt <- list()
-  opt$infile <-       "/Users/lam02/Downloads/lncRNA_wg_mixed_no_dupes.2.tsv"
-  opt$outdir <-       "/Users/lam02/Downloads/"
+  opt$infile <-       "/Users/lam02/Local/exorcise-test/0-input.txt"
+  opt$outdir <-       "/Users/lam02/Local/exorcise-test/"
   opt$seq <-          "1"
   opt$pam <-          "NGG"
-  opt$genome <-       "/Users/lam02/Library/CloudStorage/OneDrive-UniversityofCambridge/Projects/operation/exorcise/data/hg38.2020-09-22.2bit"
-  opt$exome <-        "/Users/lam02/Library/CloudStorage/OneDrive-UniversityofCambridge/Projects/operation/exorcise/data/hsa.grch38.refseqall.gz"
-  opt$priorities <-   "/Users/lam02/Library/CloudStorage/OneDrive-UniversityofCambridge/Projects/operation/exorcise/data/hsa.priorities.tsv.gz"
-  opt$mode <-         "i"
-  opt$harm <-         "3"
-  opt$control <-      "negative_control"
+  opt$genome <-       "/Users/lam02/bio/Projects/operation/exorcise/data/hg38.2020-09-22.2bit"
+  opt$exome <-        "/Users/lam02/Downloads/hsa.grch38.refseqall.tsv"
+  opt$priorities <-   "/Users/lam02/bio/Projects/operation/exorcise/data/hsa.priorities.tsv.gz"
+  opt$mode <-         "cbe"
+  opt$harm <-         "2"
+  opt$control <-      NULL
   opt$control_type <- NULL
   opt$library <-      NULL
   opt$ref <-          NULL
