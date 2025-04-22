@@ -236,7 +236,8 @@ runPtgr <- function(blats) {
     
     fwrite(as.list(out$seqSpec), blats$file_genomic_seqSpecs, sep = "\n", col.names = F)
     log_info("Verifying sequence of genome hits...")
-    system(paste0("twoBitToFa ", blats$file_genome, " -seqList=", blats$file_genomic_seqSpecs, " ", blats$file_genomic_seqs))
+    twoBitToFa_command <- "twoBitToFa"
+    system(paste0(twoBitToFa_command, " ", blats$file_genome, " -seqList=", blats$file_genomic_seqSpecs, " ", blats$file_genomic_seqs))
     
     seq <- fread(blats$file_genomic_seqs, header = F)
     seq <- tibble(exo_seq = seq %>% filter(!grepl("^>", V1)) %>% unlist())
