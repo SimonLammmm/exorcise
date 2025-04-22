@@ -1,13 +1,11 @@
 name: exorcise
 channels:
-  - defaults
   - r
-  - conda-forge
-  - anaconda
   - bioconda
+  - conda-forge
 dependencies:
   - bioconductor-genomicranges
-  - blat
+  - ucsc-blat
   - r-data.table
   - r-dplyr
   - r-foreach
@@ -21,4 +19,5 @@ dependencies:
   - r-tibble
   - r-tidyr
   - r-tidyselect
-  - rstudio
+  - r-readxl
+  - bioconductor-plyranges
