@@ -5,7 +5,7 @@ channels:
   - conda-forge
 dependencies:
   - bioconductor-genomicranges
-  - ucsc-blat
+  - bioconductor-plyranges
   - r-data.table
   - r-dplyr
   - r-foreach
@@ -20,4 +20,5 @@ dependencies:
   - r-tidyr
   - r-tidyselect
   - r-readxl
-  - bioconductor-plyranges
+  - ucsc-blat
+  - ucsc-twobittofa
