@@ -23,6 +23,10 @@ case "$1" in
         echo "Running crispr_screen_viewer:crispr-screen-viewer"
         exec /root/miniforge3/envs/crispr_screen_viewer/bin/crispr-screen-viewer "${@:2}"
         ;;
+    bin/bash)
+        echo "Running /bin/bash"
+        exec /bin/bash "${@:2}"
+        ;;
     *)
         echo "Unknown application: $1"
         echo "Usage: $0 {exorcise|ntByCycle|count_reads|crispr_pipeline|crispr-screen-viewer} [args...]"
