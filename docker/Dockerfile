@@ -22,6 +22,10 @@ RUN sed -i 's/twoBitToFa_command <- "twoBitToFa"/twoBitToFa_command <- "\/root\/
 
 # Install crispr_tools
 RUN git clone https://github.com/SimonLammmm/crispr_tools.git
+# Patch the crispr_pipeline script to use the MAGeCK installation in Miniforge
+RUN sed -i 's/mageck test/\/root\/miniforge3\/envs\/crispr_tools\/bin\/mageck test/g' /crispr_tools/crispr_tools/crispr_pipeline.py
+RUN sed -i 's/which mageck/which \/root\/miniforge3\/envs\/crispr_tools\/bin\/mageck/g' /crispr_tools/crispr_tools/crispr_pipeline.py
+RUN sed -i 's/"mageck", "-v"/"\/root\/miniforge3\/envs\/crispr_tools\/bin\/mageck", "-v"/g' /crispr_tools/crispr_tools/crispr_pipeline.py
 RUN /root/miniforge3/bin/mamba env create -f /crispr_tools/env/crispr_tools.yaml -y
 RUN /root/miniforge3/envs/crispr_tools/bin/pip install /crispr_tools/.
 
