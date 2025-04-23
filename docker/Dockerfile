@@ -28,6 +28,8 @@ RUN sed -i 's/which mageck/which \/root\/miniforge3\/envs\/crispr_tools\/bin\/ma
 RUN sed -i 's/"mageck", "-v"/"\/root\/miniforge3\/envs\/crispr_tools\/bin\/mageck", "-v"/g' /crispr_tools/crispr_tools/crispr_pipeline.py
 RUN /root/miniforge3/bin/mamba env create -f /crispr_tools/env/crispr_tools.yaml -y
 RUN /root/miniforge3/envs/crispr_tools/bin/pip install /crispr_tools/.
+# Patch the MAGeCK script to use RRA installation in Miniforge
+RUN sed -i "s/rrapath='RRA'/rrapath='\/root\/miniforge3\/envs\/crispr_tools\/bin\/RRA'/g" /root/miniforge3/envs/crispr_tools/lib/python3.11/site-packages/mageck/crisprFunction.py
 
 # Install crispr_screen_viewer
 RUN git clone https://github.com/johncthomas/crispr_screen_viewer.git
