@@ -23,7 +23,7 @@ RUN sed -i 's/twoBitToFa_command <- "twoBitToFa"/twoBitToFa_command <- "\/root\/
 # Install crispr_tools
 RUN git clone https://github.com/SimonLammmm/crispr_tools.git
 RUN /root/miniforge3/bin/mamba env create -f /crispr_tools/env/crispr_tools.yaml -y
-RUN /root/miniforge3/envs/crispr_tools/bin/pip install crispr_tools/.
+RUN /root/miniforge3/envs/crispr_tools/bin/pip install /crispr_tools/.
 
 # Install crispr_screen_viewer
 RUN git clone https://github.com/johncthomas/crispr_screen_viewer.git
