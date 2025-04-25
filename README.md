@@ -16,36 +16,93 @@ Exorcise is developed and maintained by Dr Simon Lam and is available at https:/
 
 ## Installation
 
-Docker installation of Exorcise is recommended. You can also install Exorcise using conda or from source.
+Docker installation of Exorcise is recommended. You can build your own Docker image for your operating system or pull a prebuilt one from Docker Hub to install Exorcise in one command.
 
-### Docker (recommended)
+You can also install Exorcise using conda or from source.
 
-1. Clone this repo and `cd` into it. `git clone https://github.com/SimonLammmm/exorcise`
-2. Build from the Dockerfile. `docker build -t exorcise docker/`
-3. Run. At runtime, bind mount a directory to the `/data` location in the Docker container. `docker run --rm -v .:/data/ exorcise [commands]`
+### Prebuilt Docker image (recommended)
 
-The Docker installation also includes [crispr_tools](https://github.com/SimonLammmm/crispr_tools) and [crispr_screen_viewer](https://github.com/johncthomas/crispr_screen_viewer). Possible commands are:
-* `docker run --rm -v .:/data/ exorcise exorcise`
-* `docker run --rm -v .:/data/ exorcise ntByCycle`
-* `docker run --rm -v .:/data/ exorcise count_reads`
-* `docker run --rm -v .:/data/ exorcise crispr_pipeline`
-* `docker run --rm -v .:/data/ exorcise crispr-screen-viewer`
+Navigate to the Exorcise repo on [Docker Hub](https://hub.docker.com/r/simonlammmm/exorcise/tags) and choose the desired version and OS. Then, pull:
+```
+docker pull simonlammmm/exorcise:<tag>
+```
+
+For example, to pull version 1.5.3 for Apple silicon:
+```
+docker pull simonlammmm/exorcise:1.5.3_arm64
+```
+
+To install Exorcise with Singularity:
+```
+singularity pull docker://simonlammmm/exorcise:<tag>
+```
+
+Run. At runtime, bind mount a directory to the `/data` location in the Docker container.
+```
+docker run --rm -v .:/data/ simonlammmm/exorcise exorcise [arguments]
+```
+For Singularity, speak to your cluster administrator to see what host directories are mounted in the image by default.
+```
+singularity run exorcise_<tag>.sif exorcise [arguments]
+```
+
+The Docker and Singularity installations also include [crispr_tools](https://github.com/SimonLammmm/crispr_tools) and [crispr_screen_viewer](https://github.com/johncthomas/crispr_screen_viewer). Possible commands are:
+* `docker run --rm -v .:/data/ simonlammmm/exorcise exorcise [arguments]`
+* `docker run --rm -v .:/data/ simonlammmm/exorcise ntByCycle [arguments]`
+* `docker run --rm -v .:/data/ simonlammmm/exorcise count_reads [arguments]`
+* `docker run --rm -v .:/data/ simonlammmm/exorcise crispr_pipeline [arguments]`
+* `docker run --rm -v .:/data/ simonlammmm/exorcise crispr-screen-viewer [arguments]`
+
+### Build from Dockerfile
+
+To build your own Docker image with Exorcise, follow the below steps. You might need to do this if your desired version or OS are not available on Docker Hub.
+
+1. Clone this repo and `cd` into it.
+```
+git clone https://github.com/SimonLammmm/exorcise
+```
+2. Build from the Dockerfile.
+```
+docker build -t simonlammmm/exorcise docker/
+```
+3. Run, as above for the prebuilt Docker images.
 
 ### conda
 
-1. Clone this repo and `cd` into it. `git clone https://github.com/SimonLammmm/exorcise`
-2. Install dependencies using the conda environment yaml file. `conda env create -f env/exorcise.yaml`
+1. Clone this repo and `cd` into it.
+```
+git clone https://github.com/SimonLammmm/exorcise
+```
+2. Install dependencies using the conda environment yaml file.
+```
+conda env create -f env/exorcise.yaml
+```
 3. Add the executables in `bin/` to your `PATH` using the appropriate method for your system and shell.
-4. Make the executables executable. `chmod u+x bin/*`
+4. Make the executables executable.
+```
+chmod u+x bin/*
+```
 5. Run by calling `exorcise` on the command line.
+```
+exorcise
+```
 
 ### Install from source
 
-1. Clone this repo and `cd` into it. `git clone https://github.com/SimonLammmm/exorcise`
+1. Clone this repo and `cd` into it.
+```
+git clone https://github.com/SimonLammmm/exorcise
+```
 2. Install R, Bioconductor, and BLAT dependencies listed in `env/exorcise.yaml` using the appropriate method for your system.
 3. Add the executables in `bin/` to your `PATH` using the appropriate method for your system and shell.
-4. Make the executables executable. `chmod u+x bin/*`
+4. Make the executables executable.
+```
+chmod u+x bin/*
+```
 5. Run by calling `exorcise` on the command line.
+```
+exorcise
+```
 
 
 ## Syntax
