@@ -41,7 +41,7 @@ Run. At runtime, bind mount a directory to the `/data` location in the Docker co
 ```
 docker run --rm -v .:/data/ simonlammmm/exorcise exorcise [arguments]
 ```
-For Singularity, speak to your cluster administrator to see what host directories are mounted in the image by default.
+For Singularity, speak to your cluster administrator to see what host directories are mounted in the image by default. Run with the command:
 ```
 singularity run exorcise_<tag>.sif exorcise [arguments]
 ```
@@ -66,6 +66,9 @@ git clone https://github.com/SimonLammmm/exorcise
 docker build -t simonlammmm/exorcise docker/
 ```
 3. Run, as above for the prebuilt Docker images.
+```
+docker run --rm -v .:/data/ simonlammmm/exorcise exorcise [arguments]
+```
 
 ### conda
 
