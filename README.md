@@ -2,6 +2,8 @@
 Exome-guided reannotation of nucleotide sequences (Exorcise) is available at:
 https://github.com/SimonLammmm/exorcise/
 
+Exorcise is described in Lam, S., Thomas, J.C. & Jackson, S.P. Genome-aware annotation of CRISPR guides validates targets in variant cell lines and enhances discovery in screens. Genome Med 16, 139 (2024). https://doi.org/10.1186/s13073-024-01414-4.
+
 This document describes the basic usage and syntax of Exorcise.
 
 ## Introduction
@@ -179,13 +181,15 @@ The main Exorcise output file is exorcise.tsv. Exorcise outputs are in columns s
 |     ...           |     Arbitrary columns   included in the input file.                                |
 
 ## About
-Exorcise was developed by Dr Simon Lam, University of Cambridge, mailto:sl681@cam.ac.uk.
+Exorcise is developed and maintained by Dr Simon Lam, University of Cambridge, mailto:sl681@cam.ac.uk.
 
 ## License
 This code is licensed under the Creative Commons Zero v1.0 Universal license.
 
+Ad-hoc Exorcise uses [BLAT](https://kentinformatics.com/#BLAT), which is available free for academic, personal, and non-profit uses.
 
-
+## Citation
+If you use Exorcise in your work, please cite Lam, S., Thomas, J.C. & Jackson, S.P. Genome-aware annotation of CRISPR guides validates targets in variant cell lines and enhances discovery in screens. Genome Med 16, 139 (2024). https://doi.org/10.1186/s13073-024-01414-4.
 
 
 
