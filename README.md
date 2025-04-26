@@ -34,7 +34,7 @@ For example, to pull version 1.5.3 for Apple silicon:
 docker pull simonlammmm/exorcise:1.5.3_arm64
 ```
 
-To install Exorcise with Singularity:
+To pull Exorcise with Singularity:
 ```
 singularity pull docker://simonlammmm/exorcise:<tag>
 ```
@@ -43,9 +43,9 @@ Run. At runtime, bind mount a directory to the `/data` location in the Docker co
 ```
 docker run --rm -v .:/data/ simonlammmm/exorcise exorcise [arguments]
 ```
-For Singularity, speak to your cluster administrator to see what host directories are mounted in the image by default. Run with the command:
+For Singularity, speak to your cluster administrator to see what host directories are mounted in the image by default and if you are allowed to bind other directories into the container with `-B`. Run with the command:
 ```
-singularity run exorcise_<tag>.sif exorcise [arguments]
+singularity run -B .:/data/ exorcise_<tag>.sif exorcise [arguments]
 ```
 
 The Docker and Singularity installations also include [crispr_tools](https://github.com/SimonLammmm/crispr_tools) and [crispr_screen_viewer](https://github.com/johncthomas/crispr_screen_viewer). Possible commands are:
