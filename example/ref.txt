@@ -1,0 +1,9 @@
+example-crispr-pipeline.xlsx is a subset of the experimental design of a CRISPR screen by Adam et al, 2021, https://doi.org/10.1038/s43018-021-00266-w, whose data are publicly available.
+
+example-exorcise-input.tsv.gz is a subset of the Brunello library, Doench et al, 2016, https://doi.org/10.1038/nbt.3437.
+
+example-fastq.fastq.gz is a subset of publicly available NGS data from a CRISPR screen by Adam et al, 2021, https://doi.org/10.1038/s43018-021-00266-w.
+
+example-library.tsv.gz is a subset of the TKOv2 library, Noordermeer et al, 2019, https://doi.org/10.1038/s41586-018-0340-7, in Exorcise format.
+
+example-read-counts.tsv.gz is derived from publicly available NGS data from a CRISPR screen by Adam et al, 2021, https://doi.org/10.1038/s43018-021-00266-w.
