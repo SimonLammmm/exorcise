@@ -16,7 +16,7 @@ RUN apt-get update && \
 
 # Install Exorcise
   git clone https://github.com/SimonLammmm/exorcise && \
-  /opt/miniforge3/bin/mamba env create -f /exorcise/env/exorcise.yaml -y  && \
+  /opt/miniforge3/bin/mamba env create -f /exorcise/env/exorcise.yaml -y python=3.12 && \
   export PATH=$PATH:/exorcise/bin && \
 # Patch the Exorcise main script to use the blat installation in Miniforge
   sed -i 's/blat_command <- "blat"/blat_command <- "\/opt\/miniforge3\/envs\/exorcise\/bin\/blat"/g' /exorcise/bin/exorcise.R && \
@@ -31,7 +31,7 @@ RUN apt-get update && \
   /opt/miniforge3/bin/mamba env create -f /crispr_tools/env/crispr_tools.yaml -y && \
   /opt/miniforge3/envs/crispr_tools/bin/pip install /crispr_tools/. && \
 # Patch the MAGeCK script to use RRA installation in Miniforge
-  sed -i "s/rrapath='RRA'/rrapath='\/opt\/miniforge3\/envs\/crispr_tools\/bin\/RRA'/g" /opt/miniforge3/envs/crispr_tools/lib/python3.11/site-packages/mageck/crisprFunction.py && \
+  sed -i "s/rrapath='RRA'/rrapath='\/opt\/miniforge3\/envs\/crispr_tools\/bin\/RRA'/g" /opt/miniforge3/envs/crispr_tools/lib/python3.12/site-packages/mageck/crisprFunction.py && \
 
 # Install crispr_screen_viewer
   git clone https://github.com/johncthomas/crispr_screen_viewer.git && \
