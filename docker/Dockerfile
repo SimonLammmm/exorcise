@@ -19,19 +19,19 @@ RUN apt-get update && \
   /opt/miniforge3/bin/mamba env create -f /exorcise/env/exorcise.yaml -y  && \
   export PATH=$PATH:/exorcise/bin && \
 # Patch the Exorcise main script to use the blat installation in Miniforge
-  sed -i 's/blat_command <- "blat"/blat_command <- "\/root\/miniforge3\/envs\/exorcise\/bin\/blat"/g' /exorcise/bin/exorcise.R && \
-  sed -i 's/twoBitToFa_command <- "twoBitToFa"/twoBitToFa_command <- "\/root\/miniforge3\/envs\/exorcise\/bin\/twoBitToFa"/g' /exorcise/bin/exorcise.R && \
+  sed -i 's/blat_command <- "blat"/blat_command <- "\/opt\/miniforge3\/envs\/exorcise\/bin\/blat"/g' /exorcise/bin/exorcise.R && \
+  sed -i 's/twoBitToFa_command <- "twoBitToFa"/twoBitToFa_command <- "\/opt\/miniforge3\/envs\/exorcise\/bin\/twoBitToFa"/g' /exorcise/bin/exorcise.R && \
 
 # Install crispr_tools
   git clone https://github.com/SimonLammmm/crispr_tools.git && \
 # Patch the crispr_pipeline script to use the MAGeCK installation in Miniforge
-  sed -i 's/mageck test/\/root\/miniforge3\/envs\/crispr_tools\/bin\/mageck test/g' /crispr_tools/crispr_tools/crispr_pipeline.py && \
-  sed -i 's/which mageck/which \/root\/miniforge3\/envs\/crispr_tools\/bin\/mageck/g' /crispr_tools/crispr_tools/crispr_pipeline.py && \
-  sed -i 's/"mageck", "-v"/"\/root\/miniforge3\/envs\/crispr_tools\/bin\/mageck", "-v"/g' /crispr_tools/crispr_tools/crispr_pipeline.py && \
+  sed -i 's/mageck test/\/opt\/miniforge3\/envs\/crispr_tools\/bin\/mageck test/g' /crispr_tools/crispr_tools/crispr_pipeline.py && \
+  sed -i 's/which mageck/which \/opt\/miniforge3\/envs\/crispr_tools\/bin\/mageck/g' /crispr_tools/crispr_tools/crispr_pipeline.py && \
+  sed -i 's/"mageck", "-v"/"\/opt\/miniforge3\/envs\/crispr_tools\/bin\/mageck", "-v"/g' /crispr_tools/crispr_tools/crispr_pipeline.py && \
   /opt/miniforge3/bin/mamba env create -f /crispr_tools/env/crispr_tools.yaml -y && \
   /opt/miniforge3/envs/crispr_tools/bin/pip install /crispr_tools/. && \
 # Patch the MAGeCK script to use RRA installation in Miniforge
-  sed -i "s/rrapath='RRA'/rrapath='\/root\/miniforge3\/envs\/crispr_tools\/bin\/RRA'/g" /opt/miniforge3/envs/crispr_tools/lib/python3.11/site-packages/mageck/crisprFunction.py && \
+  sed -i "s/rrapath='RRA'/rrapath='\/opt\/miniforge3\/envs\/crispr_tools\/bin\/RRA'/g" /opt/miniforge3/envs/crispr_tools/lib/python3.11/site-packages/mageck/crisprFunction.py && \
 
 # Install crispr_screen_viewer
   git clone https://github.com/johncthomas/crispr_screen_viewer.git && \
