@@ -1,0 +1,56 @@
+# exorcise docker cheatsheet
+
+# Get human genome
+curl -O "https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/hg38.2bit"
+mv hg38.2bit data/
+
+# Get exome annotations
+curl -O "https://github.com/SimonLammmm/exorcise/blob/main/data/hsa.grch38.refseqall.tsv.gz"
+mv hsa.grch38.refseqall.tsv.gz data/
+
+# Get priorities
+curl -O "https://github.com/SimonLammmm/exorcise/blob/main/data/hsa.priorities.tsv.gz"
+mv hsa.priorities.tsv.gz data/
+
+# Exorcise a library
+docker run --rm -v .:/data simonlammmm/exorcise:1.5.3_arm64 exorcise \
+  -i example/example-exorcise-input.tsv.gz \
+  -o exorcise-output/ \
+  -z NGG \
+  -q ko \
+  -g 7 \
+  -n 2 \
+  -v data/hg38.2bit \
+  -w data/hsa.grch38.refseqall.tsv.gz \
+  -y data/hsa.priorities.tsv.gz
+
+# Draw a nucleotide trace
+docker run --rm -v .:/data simonlammmm/exorcise:1.5.3_arm64 ntByCycle \
+  -f example/example-fastq.fastq.gz \
+  -n 10000 \
+  -o ntByCycle-output/
+
+# Generate counts table from NGS reads
+docker run --rm -v .:/data simonlammmm/exorcise:1.5.3_arm64 count_reads \
+  -s 0,20 \
+  -g exo_seq \
+  -n exo_symbol \
+  -j exo_id \
+  -p count_reads-output/runName \
+  --just-go \
+  --library=example/example-library.tsv.gz \
+  example/example-fastq.fastq.gz
+
+# Run batch CRISPR analysis
+docker run --rm -v .:/data simonlammmm/exorcise:1.5.3_arm64 crispr_pipeline \
+  --counts example/ \
+  --output-dir crispr_pipeline-output/ \
+  example/example-crispr-pipeline.xlsx
+
+# Add CRISPR analysis results to database
+docker run --rm -v .:/data simonlammmm/exorcise:1.5.3_arm64 crispr-screen-viewer database \
+  --out-dir crispr-screen-viewer-output/ \
+  --results-dir crispr_pipeline-output/ \
+  --counts-dir example/ \
+  --new \
+  example/example-crispr-pipeline.xlsx
