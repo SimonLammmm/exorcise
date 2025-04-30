@@ -4,7 +4,11 @@ https://github.com/SimonLammmm/exorcise/
 
 Exorcise is described in Lam, S., Thomas, J.C. & Jackson, S.P. Genome-aware annotation of CRISPR guides validates targets in variant cell lines and enhances discovery in screens. Genome Med 16, 139 (2024). https://doi.org/10.1186/s13073-024-01414-4.
 
-This document describes the basic usage and syntax of Exorcise.
+You can try Exorcise on the web at https://sjlab.cruk.cam.ac.uk/app/ddrcs/ > Exorcise.
+
+Exorcise is easily installed using Docker and runs on x86_64 and Apple silicon architectures.
+
+This document describes the concept, installation, basic usage, and syntax of Exorcise.
 
 ## Introduction
 
@@ -109,26 +113,38 @@ chmod u+x bin/*
 exorcise
 ```
 
-
 ## Syntax
+
+Example commands for the Docker image can be found in the `example/` folder.
 
 Exorcise takes mandatory and optional arguments.
 
-|     Long flag (short flag)    |     Mandatory?                         |     Value         |     Description                                                                                                                                                                                               |
-|-------------------------------|----------------------------------------|-------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-|     --infile   (-i)           |     Yes                                |     File          |     File containing   sequences to be Exorcised. Arbitrary columns will be returned in the output   file.                                                                                                     |
-|     --outdir   (-o)           |     Yes                                |     Directory     |     Working directory to   place intermediate files and the output file exorcise.tsv.                                                                                                                         |
-|     --seq   (-g)              |     Yes                                |     Number        |     Column number in the infile   that corresponds to sequences to be Exorcised. 1-based integer, must not be   greater than the number of columns in the infile.                                             |
-|     --pam   (-z)              |     No                                 |     Nucleotide    |     Sequence to be appended   to the 5' end of each sequence for BLAT purposes only. Must be in the   single-letter nucleotide alphabet (ACGTN).                                                              |
-|     --library   (-l)          |     Yes, if -v   -w   not specified    |     File          |     Exorcised library to be   used for the re-annotation. If this is not specified, then genome   and exome   must be specified. Must be an Exorcise library. Enables post-hoc mode (see   Modes section).    |
-|     --mode   (-q)             |     No                                 |     String        |     CRISPR chemistry. Can be any  of `ko` (knockout, default), `i` (inhibition), or `a` (activation), or a number (arbitrary).                                                                                                         |
-|     --genome   (-v)           |     Yes, if -l   not specified         |     File          |     Genome in 2bit format. Enables   ad-hoc mode (see Modes section). Ignored if library   is specified.                                                                                                      |
-|     --exome   (-w)            |     Yes, if -l   not specified         |     File          |     Exome from UCSC Table   Browser. Enables ad-hoc mode (see Modes section). Ignored if library   is specified.                                                                                              |
-|     --harm   (-n)             |     No                                 |     Number        |     Column number in the infile   containing groups. 1-based integer, must not be greater than the number of   columns in the infile. Enables harmonisation   (see Modes).                                    |
-|     --priorities   (-y)       |     Yes, if -n   specified and not 0   |     File          |     Feature priorities list in NCBI Datasets format. Ignored if harm is not specified. Enables   harmonisation (see Modes).                                                                                                         |
-|     --control   (-c)          |     No                                 |     String        |     Comma-separated list of   strings to treat as control sequences. R regex allowed. Ignored if harm   is not specified. Enables control reannotation (see Modes).                                                       |
-|     --control_type   (-d)     |     No                                 |     String        |     Comma-separated list of   strings of the same length as control   indicating control type. Ignored if control   is not specified. Ignored if harm is not specified.                                       |
-|     --help   (-h)             |     No                                 |     Flag          |     Show help and then   exit.                                                                                                                                                                                |
+| Long flag (short flag) | Mandatory?                     | Value      | Description                                                                                                                      |
+|------------------------|--------------------------------|------------|----------------------------------------------------------------------------------------------------------------------------------|
+| --infile (-i)          | Yes                            | File       | Input file with sequences for Exorcise.                                                                                          |
+| --outdir (-o)          | Yes                            | Directory  | Output directory.                                                                                                                |
+| --seq (-g)             | Yes                            | Number     | Column number in the infile with sequences, 1-based integer.                                                                     |
+| --pam (-z)             | No                             | Nucleotide | PAM sequence. [ACGTN] supported.                                                                                                 |
+| --library (-l)         | Yes, if -v -w not specified    | File       | Existing Exorcise library, if using post-hoc mode (see Modes section).                                                           |
+| --mode (-q)            | No                             | String     | CRISPR chemistry: ko (knockout, default), i (inhibition), a (activation), cbe (cytosine base editor), abe (adenine base editor). |
+| --genome (-v)          | Yes, if -l not specified       | File       | Genome in 2bit format.                                                                                                           |
+| --exome (-w)           | Yes, if -l not specified       | File       | Exome from UCSC Table Browser.                                                                                                   |
+| --harm (-n)            | No                             | Number     | Column number in the infile with prior symbols, 1-based integer. Enables harmonisation (see Modes).                              |
+| --priorities (-y)      | Yes, if -n specified and not 0 | File       | Feature priorities list in NCBI Datasets format. Enables harmonisation (see Modes).                                              |
+| --control (-c)         | No                             | String     | Regex strings in the -n column to treat as controls, comma-separated list. Enables control reannotation (see Modes).             |
+| --control_type (-d)    | No                             | String     | Control types, comma-separated list, same length as -c.                                                                          |
+| --help (-h)            | No                             | Flag       | Show help and then exit.                                                                                                         |
+
+## CRISPR chemistry
+
+Use the `-q` flag to set the CRISPR chemistry.
+
+* Use `-q ko` (default) for CRISPR knockout. Guides are annotated with features overlapping the Cas9 cut site.
+* Use `-q a` for CRISPR activation and `-q i` for CRISPR interference. In both of these modes, guides are annotated with features within 500 bp of the guide target site. The distinction in the syntax is for documentation purposes only.
+* Use `-q NUM` where `NUM` is an integer for CRISPR activation/interference chemistry considering features within `NUM` bp of the guide target site.
+* Use `-q cbe` for cytosine base editor. This calculates C -> T base edits within the base editing window [2,8] relative to the guide target site.
+* Use `-q abe` for adenine base editor. This calculates A -> G base edits within the base editing window [4,9] relative to the guide target site.
+* Use `-q beXY0123` for custom base editor chemistry, where `X` is the original base, `Y` is the new base, `01` is the start of the base editing window, and `23` is the end of the base editing window. `X` and `Y` must be in [ACGT]; and `01` and `23` must be two digits each, 1-based indexing from the PAM-distal end of the guide.
 
 ## Modes
 
@@ -140,14 +156,14 @@ Both post-hoc and ad-hoc modes support harmonisation on the harm column if speci
 
 The following table shows Exorcise behaviours when different sets of inputs are received. Combined behaviour is allowed by specifying the necessary combinations of inputs. (Note that the inputs -i, -o, and -g are mandatory and so are omitted from the table.) 
 
-|     Inputs                 |     Behaviours                                                                                |
-|----------------------------|-----------------------------------------------------------------------------------------------|
-|     -v, -w                 |     Ad-hoc mode: aligns   guides to the genome and uses set theory to find exonic hits.       |
-|     -l                     |     Post-hoc mode: uses an   existing Exorcise library to reannotate input sequences.         |
-|     -n, -y                 |     Harmonisation: also performs   group-level reannotation.                                  |
-|     -n, -y,   -c   (-d)    |     Control reannotation: also   reannotates controls to the optional vector control_type.    |
-|     -l, omit -n,   -y      |     Use post-hoc mode and inherit   existing harmonisations from the library, if any.         |
-|     -l, -n 0               |     Use post-hoc mode and   explicitly specify not to inherit existing harmonisations.        |
+| Inputs                   | Behaviours                                                                        |
+|--------------------------|-----------------------------------------------------------------------------------|
+| `-v`; `-w`               | Ad-hoc mode: aligns guides to the genome and uses set theory to find exonic hits. |
+| `-l`                     | Post-hoc mode: uses an existing Exorcise library to reannotate input sequences.   |
+| `-n`; `-y`               | Harmonisation: reannotates prior symbols.                                         |
+| `-n`; `-y`; `-c`, (`-d`) | Control reannotation: reannotates controls to the optional argument `-d`.         |
+| `-l`; omit `-n`, `-y`    | Use post-hoc mode and inherit existing harmonisations from the library, if any.   |
+| `-l`; `-n 0`             | Use post-hoc mode and explicitly specify not to inherit existing harmonisations.  |
 
 ## Outputs
 
