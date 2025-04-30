@@ -119,21 +119,21 @@ Example commands for the Docker image can be found in the `example/` folder.
 
 Exorcise takes mandatory and optional arguments.
 
-| Long flag (short flag) | Mandatory?                     | Value      | Description                                                                                                                      |
-|------------------------|--------------------------------|------------|----------------------------------------------------------------------------------------------------------------------------------|
-| --infile (-i)          | Yes                            | File       | Input file with sequences for Exorcise.                                                                                          |
-| --outdir (-o)          | Yes                            | Directory  | Output directory.                                                                                                                |
-| --seq (-g)             | Yes                            | Number     | Column number in the infile with sequences, 1-based integer.                                                                     |
-| --pam (-z)             | No                             | Nucleotide | PAM sequence. [ACGTN] supported.                                                                                                 |
-| --library (-l)         | Yes, if -v -w not specified    | File       | Existing Exorcise library, if using post-hoc mode (see Modes section).                                                           |
-| --mode (-q)            | No                             | String     | CRISPR chemistry: ko (knockout, default), i (inhibition), a (activation), cbe (cytosine base editor), abe (adenine base editor). |
-| --genome (-v)          | Yes, if -l not specified       | File       | Genome in 2bit format.                                                                                                           |
-| --exome (-w)           | Yes, if -l not specified       | File       | Exome from UCSC Table Browser.                                                                                                   |
-| --harm (-n)            | No                             | Number     | Column number in the infile with prior symbols, 1-based integer. Enables harmonisation (see Modes).                              |
-| --priorities (-y)      | Yes, if -n specified and not 0 | File       | Feature priorities list in NCBI Datasets format. Enables harmonisation (see Modes).                                              |
-| --control (-c)         | No                             | String     | Regex strings in the -n column to treat as controls, comma-separated list. Enables control reannotation (see Modes).             |
-| --control_type (-d)    | No                             | String     | Control types, comma-separated list, same length as -c.                                                                          |
-| --help (-h)            | No                             | Flag       | Show help and then exit.                                                                                                         |
+| Long flag (short flag)  | Mandatory?                         | Value      | Description                                                                                                                                |
+|-------------------------|------------------------------------|------------|--------------------------------------------------------------------------------------------------------------------------------------------|
+| `--infile` (`-i`)       | Yes                                | File       | Input file with sequences for Exorcise.                                                                                                    |
+| `--outdir` (`-o`)       | Yes                                | Directory  | Output directory.                                                                                                                          |
+| `--seq` (`-g`)          | Yes                                | Number     | Column number in the infile with sequences, 1-based integer.                                                                               |
+| `--pam` (`-z`)          | No                                 | Nucleotide | PAM sequence. [ACGTN] supported.                                                                                                           |
+| `--library` (`-l`)      | Yes, if `-v -w` not specified      | File       | Existing Exorcise library, if using post-hoc mode (see Modes section).                                                                     |
+| `--mode` (`-q`)         | No                                 | String     | CRISPR chemistry: `ko` (knockout, default), `i` (inhibition), `a` (activation), `cbe` (cytosine base editor), `abe` (adenine base editor). |
+| `--genome` (`-v`)       | Yes, if `-l` not specified         | File       | Genome in 2bit format.                                                                                                                     |
+| `--exome` (`-w`)        | Yes, if `-l` not specified         | File       | Exome from UCSC Table Browser.                                                                                                             |
+| `--harm` (`-n`)         | No                                 | Number     | Column number in the infile with prior symbols, 1-based integer. Enables harmonisation (see Modes).                                        |
+| `--priorities` (`-y`)   | Yes, if `-n` specified and not `0` | File       | Feature priorities list in NCBI Datasets format. Enables harmonisation (see Modes).                                                        |
+| `--control` (`-c`)      | No                                 | String     | Regex strings in the `-n` column to treat as controls, comma-separated list. Enables control reannotation (see Modes).                     |
+| `--control_type` (`-d`) | No                                 | String     | Control types, comma-separated list, same length as `-c`.                                                                                  |
+| `--help` (`-h`)         | No                                 | Flag       | Show help and then exit.                                                                                                                   |
 
 ## CRISPR chemistry
 
