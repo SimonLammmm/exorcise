@@ -5,11 +5,11 @@ curl -O "https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/hg38.2bit"
 mv hg38.2bit data/
 
 # Get exome annotations
-curl -O "https://github.com/SimonLammmm/exorcise/blob/main/data/hsa.grch38.refseqall.tsv.gz"
+curl -O "https://raw.githubusercontent.com/SimonLammmm/exorcise/main/data/hsa.grch38.refseqall.tsv.gz"
 mv hsa.grch38.refseqall.tsv.gz data/
 
 # Get priorities
-curl -O "https://github.com/SimonLammmm/exorcise/blob/main/data/hsa.priorities.tsv.gz"
+curl -O "https://raw.githubusercontent.com/SimonLammmm/exorcise/main/data/hsa.priorities.tsv.gz"
 mv hsa.priorities.tsv.gz data/
 
 # Exorcise a library
