@@ -29,87 +29,87 @@ You can also install Exorcise using conda or from source.
 ### Prebuilt Docker image (recommended)
 
 Navigate to the Exorcise repo on [Docker Hub](https://hub.docker.com/r/simonlammmm/exorcise/tags) and choose the desired version and OS. Then, pull:
-```
+```bash
 docker pull simonlammmm/exorcise:<tag>
 ```
 
 For example, to pull version 1.5.3 for Apple silicon:
-```
+```bash
 docker pull simonlammmm/exorcise:1.5.3_arm64
 ```
 
 To pull Exorcise with Singularity:
-```
+```bash
 singularity pull docker://simonlammmm/exorcise:<tag>
 ```
 
 Run. At runtime, bind mount a directory to the `/data` location in the Docker container.
-```
-docker run --rm -v .:/data/ simonlammmm/exorcise exorcise [arguments]
+```bash
+docker run --rm -v .:/data/ simonlammmm/exorcise:<tag> exorcise [arguments]
 ```
 For Singularity, speak to your cluster administrator to see what host directories are mounted in the image by default and if you are allowed to bind other directories into the container with `-B`. Run with the command:
-```
+```bash
 singularity run -B .:/data/ exorcise_<tag>.sif exorcise [arguments]
 ```
 
 The Docker and Singularity installations also include [crispr_tools](https://github.com/SimonLammmm/crispr_tools) and [crispr_screen_viewer](https://github.com/johncthomas/crispr_screen_viewer). Possible commands are:
-* `docker run --rm -v .:/data/ simonlammmm/exorcise exorcise [arguments]`
-* `docker run --rm -v .:/data/ simonlammmm/exorcise ntByCycle [arguments]`
-* `docker run --rm -v .:/data/ simonlammmm/exorcise count_reads [arguments]`
-* `docker run --rm -v .:/data/ simonlammmm/exorcise crispr_pipeline [arguments]`
-* `docker run --rm -v .:/data/ simonlammmm/exorcise crispr-screen-viewer [arguments]`
+* `exorcise [arguments]`
+* `ntByCycle [arguments]`
+* `count_reads [arguments]`
+* `crispr_pipeline [arguments]`
+* `crispr-screen-viewer [arguments]`
 
 ### Build from Dockerfile
 
 To build your own Docker image with Exorcise, follow the below steps. You might need to do this if your desired version or OS are not available on Docker Hub.
 
 1. Clone this repo and `cd` into it.
-```
+```bash
 git clone https://github.com/SimonLammmm/exorcise
 ```
 2. Build from the Dockerfile.
-```
+```bash
 docker build -t simonlammmm/exorcise docker/
 ```
 3. Run, as above for the prebuilt Docker images.
-```
+```bash
 docker run --rm -v .:/data/ simonlammmm/exorcise exorcise [arguments]
 ```
 
 ### conda
 
 1. Clone this repo and `cd` into it.
-```
+```bash
 git clone https://github.com/SimonLammmm/exorcise
 ```
 2. Install dependencies using the conda environment yaml file.
-```
+```bash
 conda env create -f env/exorcise.yaml
 ```
 3. Add the executables in `bin/` to your `PATH` using the appropriate method for your system and shell.
 4. Make the executables executable.
-```
+```bash
 chmod u+x bin/*
 ```
 5. Run by calling `exorcise` on the command line.
-```
+```bash
 exorcise
 ```
 
 ### Install from source
 
 1. Clone this repo and `cd` into it.
-```
+```bash
 git clone https://github.com/SimonLammmm/exorcise
 ```
 2. Install R, Bioconductor, and BLAT dependencies listed in `env/exorcise.yaml` using the appropriate method for your system.
 3. Add the executables in `bin/` to your `PATH` using the appropriate method for your system and shell.
 4. Make the executables executable.
-```
+```bash
 chmod u+x bin/*
 ```
 5. Run by calling `exorcise` on the command line.
-```
+```bash
 exorcise
 ```
 
