@@ -1,4 +1,5 @@
-# exorcise docker cheatsheet
+# Change this for the Exorcise image you are using
+EXORCISE_IMAGE="simonlammmm/exorcise:1.5.3.1_arm64"
 
 # Get human genome
 curl -O "https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/hg38.2bit"
@@ -13,7 +14,7 @@ curl -O "https://raw.githubusercontent.com/SimonLammmm/exorcise/main/data/hsa.pr
 mv hsa.priorities.tsv.gz data/
 
 # Exorcise a library
-docker run --rm -v .:/data simonlammmm/exorcise:1.5.3_arm64 exorcise \
+docker run --rm -v .:/data $EXORCISE_IMAGE exorcise \
   -i example/example-exorcise-input.tsv.gz \
   -o exorcise-output/ \
   -z NGG \
@@ -25,13 +26,13 @@ docker run --rm -v .:/data simonlammmm/exorcise:1.5.3_arm64 exorcise \
   -y data/hsa.priorities.tsv.gz
 
 # Draw a nucleotide trace
-docker run --rm -v .:/data simonlammmm/exorcise:1.5.3_arm64 ntByCycle \
+docker run --rm -v .:/data $EXORCISE_IMAGE ntByCycle \
   -f example/example-fastq.fastq.gz \
   -n 10000 \
   -o ntByCycle-output/
 
 # Generate counts table from NGS reads
-docker run --rm -v .:/data simonlammmm/exorcise:1.5.3_arm64 count_reads \
+docker run --rm -v .:/data $EXORCISE_IMAGE count_reads \
   -s 0,20 \
   -g exo_seq \
   -n exo_symbol \
@@ -42,13 +43,13 @@ docker run --rm -v .:/data simonlammmm/exorcise:1.5.3_arm64 count_reads \
   example/example-fastq.fastq.gz
 
 # Run batch CRISPR analysis
-docker run --rm -v .:/data simonlammmm/exorcise:1.5.3_arm64 crispr_pipeline \
+docker run --rm -v .:/data $EXORCISE_IMAGE crispr_pipeline \
   --counts example/ \
   --output-dir crispr_pipeline-output/ \
   example/example-crispr-pipeline.xlsx
 
 # Add CRISPR analysis results to database
-docker run --rm -v .:/data simonlammmm/exorcise:1.5.3_arm64 crispr-screen-viewer database \
+docker run --rm -v .:/data $EXORCISE_IMAGE crispr-screen-viewer database \
   --out-dir crispr-screen-viewer-output/ \
   --results-dir crispr_pipeline-output/ \
   --counts-dir example/ \
