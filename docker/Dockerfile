@@ -36,10 +36,20 @@ RUN apt-get update && \
 # Install crispr_screen_viewer
   git clone https://github.com/johncthomas/crispr_screen_viewer.git && \
   /opt/miniforge3/bin/mamba create -n crispr_screen_viewer python -y && \
-  /opt/miniforge3/envs/crispr_screen_viewer/bin/pip install /crispr_screen_viewer/. && \
+  /opt/miniforge3/envs/crispr_screen_viewer/bin/pip install /crispr_screen_viewer/. scipy==1.15.3 && \
 
 # Clean up
   /opt/miniforge3/bin/mamba clean --all -y && \
+  rm -rf /opt/miniforge3/pkgs && \
+  rm /Miniforge*.sh && \
+  rm -rf /exorcise/data && \
+  rm -rf /exorcise/env && \
+  rm -rf /exorcise/example && \
+  rm -rf /exorcise/manuscript && \
+  rm -rf /crispr_tools/det && \
+  rm -rf /crispr_tools/doc && \
+  rm -rf /crispr_tools/env && \
+  rm -rf /crispr_tools/files && \
 
 # Install entrypoint
   chmod +x /exorcise/docker/entrypoint.sh
