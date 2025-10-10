@@ -36,7 +36,7 @@ RUN apt-get update && \
 # Install crispr_screen_viewer
   git clone https://github.com/johncthomas/crispr_screen_viewer.git && \
   /opt/miniforge3/bin/mamba create -n crispr_screen_viewer python -y && \
-  /opt/miniforge3/envs/crispr_screen_viewer/bin/pip install /crispr_screen_viewer/. scipy==1.15.3 && \
+  /opt/miniforge3/envs/crispr_screen_viewer/bin/pip install /crispr_screen_viewer/. scipy && \
 
 # Clean up
   /opt/miniforge3/bin/mamba clean --all -y && \
