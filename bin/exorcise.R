@@ -48,8 +48,9 @@
 # 1.5.1         2024-03-19T17:47:13   enable inheriting arbitrary columns in exome
 # 1.5.2         2024-04-29T13:06:59   add custom base editor mode
 # 1.5.3         2024-10-21T17:23:06   fix guide ids in BE mode
+# 1.6           2025-10-29T19:35:35   support bystander edits in BE mode
 
-ver <- "1.5.3"
+ver <- "1.6"
 
 #### INIT ####
 suppressWarnings(suppressMessages({
@@ -458,19 +459,68 @@ baseEdit <- function(opt, blats) {
     beWindowSeq = as.character(baseEdited$be_window_seq)) %>%
     group_by(exo_target, strand, beWindowSeq) %>%
     reframe(
-      be_chr, exo_target, strand, beWindowSeq,
-      be_position = case_when(strand == "+" ~ stri_locate_all(beWindowSeq, fixed = opt$be_from[1]),   # find be position relative to window
-                              strand == "-" ~ stri_locate_all(beWindowSeq, fixed = opt$be_from[2])),
-      be_position = be_position[[1]][,1],
-      be_original = substr(beWindowSeq, be_position, be_position),
+      be_chr, exo_target, strand, beWindowSeq, start,
+      be_position_in_window = case_when(strand == "+" ~ stri_locate_all(beWindowSeq, fixed = opt$be_from[1]),   # find be position relative to window
+                                        strand == "-" ~ stri_locate_all(beWindowSeq, fixed = opt$be_from[2])),
+      be_position_in_window = be_position_in_window[[1]][,1],
+      be_original = substr(beWindowSeq, be_position_in_window, be_position_in_window),
       be_mutation = case_when(be_original == opt$be_from[1] ~ opt$be_to[1],
                               be_original == opt$be_from[2] ~ opt$be_to[2]),
-      be_position = be_position + start - 1 # find be position relative to chromosome
+      be_position = be_position_in_window + start - 1
     )
+  
+  # Calculate bystander mutations
+  calculateBystanders <- function(target) {
+    bystanders <- tibble()
+    # From pairwise to n-wise simultaneous mutations
+    for (b in 2:nchar(target$beWindowSeq[1])) {
+      if (b <= nrow(target)) {
+        combinations = combn(1:nrow(target), b)
+        # For each set of n-wise simultaneous mutations, calculate original and mutant sequences
+        for (n in 1:ncol(combinations)) {
+          comb = combinations[, n]
+          comb_position_in_window = c(target$be_position_in_window[min(comb)],
+                                      target$be_position_in_window[max(comb)])
+          comb_be_original = substr(target$beWindowSeq[1],
+                                    comb_position_in_window[1],
+                                    comb_position_in_window[2])
+          comb_be_mutation = target$beWindowSeq[1]
+          for (c in comb) {
+            substr(comb_be_mutation, target$be_position_in_window[c], target$be_position_in_window[c]) <- target$be_mutation[c]
+          }
+          comb_be_mutation = substr(comb_be_mutation,
+                                    comb_position_in_window[1],
+                                    comb_position_in_window[2])
+          combEdits <- tibble(exo_target = target$exo_target[1],
+                              strand = target$strand[1],
+                              beWindowSeq = target$beWindowSeq[1],
+                              be_chr = target$be_chr[1],
+                              be_position_in_window = min(comb_position_in_window),
+                              be_original = comb_be_original,
+                              be_mutation = comb_be_mutation,
+                              be_position = be_position_in_window + target$start[1] - 1
+          )
+          bystanders <- bind_rows(bystanders,
+                                  combEdits)
+        }
+      }
+    }
+    return(bystanders)
+  }
+  
+  # Calculate bystander mutations  
+  bystanders <- foreach(target = unique(baseEdits$exo_target), .combine = "bind_rows") %do% {
+    calculateBystanders(target = baseEdits %>% filter(exo_target == target))
+  }
+  
+  # Append to singlet base edits
+  baseEdits <- bind_rows(baseEdits, bystanders) %>%
+    select(-start)
+  
   baseEdits <- baseEdits %>% filter(!is.na(be_position))
   baseEdits2 <- GRanges(seqnames = baseEdits$be_chr,
                         ranges = IRanges(start = baseEdits$be_position,
-                                         end = baseEdits$be_position+1),
+                                         end = baseEdits$be_position+nchar(baseEdits$be_original)),
                         strand = baseEdits$strand,
                         exo_target = baseEdits$exo_target,
                         be_original = baseEdits$be_original,
@@ -597,7 +647,11 @@ baseEdit <- function(opt, blats) {
     left_join(spliced2, by = c("transcript", "name2", "strand")) %>%
     filter(be_relative_position_in_cds < nchar(flseq)) # remove base edits 1nt outside of exon bounds
   splicedBaseEdits3$be_flseq <- splicedBaseEdits3$flseq
-  substr(splicedBaseEdits3$be_flseq, splicedBaseEdits3$be_relative_position_in_cds+1, splicedBaseEdits3$be_relative_position_in_cds+1) <- splicedBaseEdits3$be_mutation
+  for (i in 1:nrow(splicedBaseEdits3)) {
+    substr(splicedBaseEdits3$be_flseq[i],
+           splicedBaseEdits3$be_relative_position_in_cds[i]+1,
+           splicedBaseEdits3$be_relative_position_in_cds[i]+nchar(splicedBaseEdits3$be_original[i])) <- splicedBaseEdits3$be_mutation[i]
+  }
   
   # Reverse complement sequences on the minus strand and in silico translate
   # Unedited sequences
@@ -616,13 +670,45 @@ baseEdit <- function(opt, blats) {
     mutate(be_translated = as.character(translate(DNAStringSet(be_flseq))),
            be_position_in_aa = case_when(strand == "+" ~ floor(be_relative_position_in_cds / 3) + 1,
                                          strand == "-" ~ floor((nchar(be_flseq) - 1 - be_relative_position_in_cds) / 3 + 1)),# AA sequences are ONE-based, NOT ZERO-BASED
-           be_modified_in_aa = substr(be_translated, be_position_in_aa, be_position_in_aa))
+           be_modified_in_aa = substr(be_translated, be_position_in_aa, be_position_in_aa + floor((nchar(be_original)-1)/3)))
   
+  # Determine if the translated sequence is changed
+  # Function to find difference range
+  find_difference_range <- function(s1, s2) {
+    suppressWarnings({
+      # Ensure strings are of equal length
+      stopifnot(nchar(s1) == nchar(s2))
+      
+      # Convert strings to character vectors
+      chars1 <- strsplit(s1, "")[[1]]
+      chars2 <- strsplit(s2, "")[[1]]
+      
+      # Find first difference
+      first_diff <- which(chars1 != chars2)[1]
+      
+      # Find last difference
+      last_diff <- max(which(chars1 != chars2))
+    })
+    
+    # Return range of differences
+    return(list(
+      start = first_diff, 
+      end = last_diff, 
+      length = last_diff - first_diff + 1
+    ))
+  }
   
   splicedBaseEdits3 <- splicedBaseEdits3 %>%
     rowwise() %>%
-    mutate(be_original_in_aa = substr(spliced2$translated[spliced2$transcript == transcript], be_position_in_aa, be_position_in_aa),
-           ntMutationDesc = case_when(strand == "+" ~ paste0(be_original, be_relative_position_in_cds+1, be_mutation),
+    mutate(translated = spliced2$translated[spliced2$transcript == transcript],
+           diff = list(find_difference_range(translated, be_translated)),
+           be_original_in_aa = case_when(!is.na(diff$start) ~ substr(translated, diff$start, diff$start+diff$length-1),
+                                         T ~ substr(translated, be_position_in_aa, be_position_in_aa + floor(nchar(be_original)/3))),
+           be_modified_in_aa = case_when(!is.na(diff$start) ~ substr(be_translated, diff$start, diff$start+diff$length-1),
+                                         T ~ be_original_in_aa),
+           be_position_in_aa = case_when(!is.na(diff$start) ~ diff$start,
+                                         T ~ be_position_in_aa)) %>%
+    mutate(ntMutationDesc = case_when(strand == "+" ~ paste0(be_original, be_relative_position_in_cds+1, be_mutation),
                                       strand == "-" ~ paste0(chartr("ATCG", "TAGC", be_original), nchar(be_flseq)-be_relative_position_in_cds, chartr("ATCG", "TAGC", be_mutation))),
            aaMutationDesc = paste0(be_original_in_aa, be_position_in_aa, be_modified_in_aa)) %>%
     ungroup()
@@ -639,7 +725,7 @@ baseEdit <- function(opt, blats) {
     #x = (mapping %>% transmute(seqnames, start, end, width, strand, exo_symbol, exo_seq, exo_cut, assembly, exome, exo_target) %>% unique()),
     x = mapping %>% unique(),
     y = (splicedBaseEdits3 %>% transmute(exo_target, transcript, transcript_strand = strand,
-                                         be_position_in_grch38 = paste0(be_chr, ":", be_position, "-", be_position+1),
+                                         be_position_in_grch38 = paste0(be_chr, ":", be_position, "-", be_position+nchar(be_original)),
                                          be_nt_mutation = ntMutationDesc, be_aa_mutation = aaMutationDesc, be_consequence)),
     by = "exo_target",
     relationship = "many-to-many"
@@ -1246,16 +1332,16 @@ fixOpts <- function(opt) {
 # Test vector
 if (interactive()) {
   opt <- list()
-  opt$infile <-       "/Users/lam02/Local/exorcise-test/0-input.txt"
-  opt$outdir <-       "/Users/lam02/Local/exorcise-test/"
-  opt$seq <-          "1"
-  opt$pam <-          "NGG"
-  opt$genome <-       "/Users/lam02/bio/Projects/operation/exorcise/data/hg38.2020-09-22.2bit"
-  opt$exome <-        "/Users/lam02/Downloads/hsa.grch38.refseqall.tsv"
-  opt$priorities <-   "/Users/lam02/bio/Projects/operation/exorcise/data/hsa.priorities.tsv.gz"
-  opt$mode <-         "cbe"
-  opt$harm <-         "2"
-  opt$control <-      NULL
+  opt$infile <-       ""
+  opt$outdir <-       ""
+  opt$seq <-          ""
+  opt$pam <-          ""
+  opt$genome <-       ""
+  opt$exome <-        ""
+  opt$priorities <-   ""
+  opt$mode <-         ""
+  opt$harm <-         ""
+  opt$control <-      c("")
   opt$control_type <- NULL
   opt$library <-      NULL
   opt$ref <-          NULL
