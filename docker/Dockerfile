@@ -22,8 +22,8 @@ RUN apt-get update && \
   /opt/miniforge3/bin/mamba env create -f /exorcise/env/exorcise.yaml -y python=3.12 && \
   export PATH=$PATH:/exorcise/bin && \
 # Patch the Exorcise main script to use the blat installation in Miniforge
-  sed -i 's/blat_command <- "blat"/blat_command <- "\/opt\/miniforge3\/envs\/exorcise\/bin\/blat"/g' /exorcise/bin/exorcise.R && \
-  sed -i 's/twoBitToFa_command <- "twoBitToFa"/twoBitToFa_command <- "\/opt\/miniforge3\/envs\/exorcise\/bin\/twoBitToFa"/g' /exorcise/bin/exorcise.R && \
+  sed -i 's/blat_command <- "blat"/blat_command <- "\/opt\/miniforge3\/envs\/exorcise\/bin\/blat"/g' /exorcise/bin/psl.R && \
+  sed -i 's/twoBitToFa_command <- "twoBitToFa"/twoBitToFa_command <- "\/opt\/miniforge3\/envs\/exorcise\/bin\/twoBitToFa"/g' /exorcise/bin/psl.R && \
 
 # Install crispr_tools
   git clone https://github.com/SimonLammmm/crispr_tools.git && \
