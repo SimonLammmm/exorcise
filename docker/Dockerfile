@@ -8,7 +8,10 @@ SHELL ["/bin/bash", "-c"]
 # Install dependencies
 RUN apt-get update && \
   apt-get install --no-install-recommends -y \
-  curl git g++ ca-certificates && \
+  curl \
+  git \
+  g++ \
+  ca-certificates && \
 
 # Install Miniforge
   curl -L -O "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-$(uname)-$(uname -m).sh" && \
@@ -31,12 +34,12 @@ RUN apt-get update && \
   /opt/miniforge3/bin/mamba env create -f /crispr_tools/env/crispr_tools.yaml -y && \
   /opt/miniforge3/envs/crispr_tools/bin/pip install /crispr_tools/. && \
 # Patch the MAGeCK script to use RRA installation in Miniforge
-  sed -i "s/rrapath='RRA'/rrapath='\/opt\/miniforge3\/envs\/crispr_tools\/bin\/RRA'/g" /opt/miniforge3/envs/crispr_tools/lib/python3.12/site-packages/mageck/crisprFunction.py && \
+  sed -i "s/rrapath='RRA'/rrapath='\/opt\/miniforge3\/envs\/crispr_tools\/bin\/RRA'/g" /opt/miniforge3/envs/crispr_tools/lib/python3.10/site-packages/mageck/crisprFunction.py && \
 
 # Install crispr_screen_viewer
   git clone https://github.com/johncthomas/crispr_screen_viewer.git && \
-  /opt/miniforge3/bin/mamba create -n crispr_screen_viewer python -y && \
-  /opt/miniforge3/envs/crispr_screen_viewer/bin/pip install /crispr_screen_viewer/. scipy && \
+  /opt/miniforge3/bin/mamba create -n crispr_screen_viewer python=3.10.20 -y && \
+  /opt/miniforge3/envs/crispr_screen_viewer/bin/pip install /crispr_screen_viewer/. scipy==1.15.2 && \
 
 # Clean up
   /opt/miniforge3/bin/mamba clean --all -y && \

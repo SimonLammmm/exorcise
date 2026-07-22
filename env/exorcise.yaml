@@ -4,21 +4,21 @@ channels:
   - bioconda
   - conda-forge
 dependencies:
-  - bioconductor-genomicranges
-  - bioconductor-plyranges
-  - r-data.table
-  - r-dplyr
-  - r-foreach
-  - r-ggplot2
-  - r-htmlwidgets
-  - r-logger
-  - r-optparse
-  - r-plotly
-  - r-r.utils
-  - r-scales
-  - r-tibble
-  - r-tidyr
-  - r-tidyselect
-  - r-readxl
-  - ucsc-blat
-  - ucsc-twobittofa
+  - bioconductor-genomicranges=1.62.1 
+  - bioconductor-plyranges=1.30.1
+  - r-data.table=1.18.4
+  - r-dplyr=1.2.1
+  - r-foreach=1.5.2
+  - r-ggplot2=4.0.3 
+  - r-htmlwidgets=1.6.4 
+  - r-logger=0.4.2 
+  - r-optparse=1.8.2 
+  - r-plotly=4.12.0
+  - r-r.utils=2.13.0 
+  - r-scales=1.4.0
+  - r-tibble=3.3.1
+  - r-tidyr=.3.2 
+  - r-tidyselect=1.2.1 
+  - r-readxl=1.5.0 
+  - ucsc-blat=482
+  - ucsc-twobittofa=482
