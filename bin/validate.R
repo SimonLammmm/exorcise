@@ -40,16 +40,6 @@ fixOpts <- function(opt) {
       opt$infile <- opt$infile[1]
       warnings <- c(warnings, paste0("Warning: --infile received more than one argument. Using first value only: ", opt$infile, "."))
     }
-    if(!file.exists(opt$infile)) {
-      opt$infile_glob <- Sys.glob(paste0(opt$infile, "*"))
-      if(length(opt$infile_glob) == 0) {
-        errors <- c(errors, paste0("Error: --infile ", opt$infile, " not found."))
-        opt$infile <- NULL
-      } else {
-        opt$infile <- opt$infile_glob
-        warnings <- c(warnings, paste0("Warning: --infile accepted as globbed argument ", opt$infile, "."))
-      }
-    }
     if(!isFile(opt$infile)) {
       errors <- c(errors, paste0("Error: --infile ", opt$infile, " is not a file."))
       opt$infile <- NULL
@@ -103,35 +93,8 @@ fixOpts <- function(opt) {
   # check library
   if(length(opt$library) > 0) {
     warnings <- c(warnings, paste0("Warning: deprecated option --library specified. Ignoring."))
-    # if(length(opt$library) > 1) {
-    #   opt$library <- opt$library[1]
-    #   warnings <- c(warnings, paste0("Warning: --library received more than one argument. Using first value only: ", opt$library, "."))
-    # }
-    # if(!file.exists(opt$library)) {
-    #   opt$library_glob <- Sys.glob(paste0(opt$library, "*"))
-    #   if(length(opt$library_glob) == 0) {
-    #     errors <- c(errors, paste0("Error: --library ", opt$library, " not found."))
-    #   } else {
-    #     opt$library <- opt$library_glob
-    #     warnings <- c(warnings, paste0("Warning: --library accepted as globbed argument ", opt$library))
-    #   }
-    # }
-    # if(file.exists(opt$library)) {
-    #   opt$library_headers <- names(fread(opt$library, nrows = 0))
-    #   if(!("exo_id" %in% opt$library_headers)) {
-    #     errors <- c(errors, paste0("Error: --library ", opt$library, " doesn't look like an exorcised library. Expected an `exo_id` column."))
-    #   }
-    #   if(!("exo_seq" %in% opt$library_headers)) {
-    #     errors <- c(errors, paste0("Error: --library ", opt$library, " doesn't look like an exorcised library. Expected an `exo_seq` column."))
-    #   }
-    #   if(!("exo_symbol" %in% opt$library_headers)) {
-    #     errors <- c(errors, paste0("Error: --library ", opt$library, " doesn't look like an exorcised library. Expected an `exo_symbol` column."))
-    #   }
-    # }
-  } #else {
-    opt$adhoc <- T
-    #warnings <- c(warnings, paste0("Info: --library not specified. Using ad-hoc mode."))
-  #}
+  }
+  opt$adhoc <- T
   
   # check pam
   if(length(opt$pam) > 0) {
@@ -208,17 +171,6 @@ fixOpts <- function(opt) {
       opt$genome <- opt$genome[1]
       warnings <- c(warnings, paste0("Warning: --genome received more than one argument. Using first value only: ", opt$genome, "."))
     }
-    if(!file.exists(opt$genome)) {
-      opt$genome_glob <- Sys.glob(paste0(opt$genome, "*"))
-      if(length(opt$genome_glob) == 0) {
-        errors <- c(errors, paste0("Error: --genome ", opt$genome, " not found."))
-      } else {
-        opt$genome <- opt$genome_glob
-        warnings <- c(warnings, paste0("Warning: --genome accepted as globbed argument ", opt$genome))
-      }
-    }
-  # } else if(opt$adhoc) {
-  #   errors <- c(errors, paste0("Error: --genome not passed while in ad-hoc mode."))
   } else {
     errors <- c(errors, paste0("Error: --genome not specified."))
   }
@@ -228,15 +180,6 @@ fixOpts <- function(opt) {
     if(length(opt$exome) > 1) {
       opt$exome <- opt$exome[1]
       warnings <- c(warnings, paste0("Warning: --exome received more than one argument. Using first value only: ", opt$exome, "."))
-    }
-    if(!file.exists(opt$exome)) {
-      opt$exome_glob <- Sys.glob(paste0(opt$exome, "*"))
-      if(length(opt$exome_glob) == 0) {
-        errors <- c(errors, paste0("Error: --exome ", opt$exome, " not found."))
-      } else {
-        opt$exome <- opt$exome_glob
-        warnings <- c(warnings, paste0("Warning: --exome accepted as globbed argument ", opt$exome))
-      }
     }
     if(file.exists(opt$exome)) {
       opt$exome_headers <- names(fread(opt$exome, nrows = 0, skip = "Starts"))
@@ -267,8 +210,8 @@ fixOpts <- function(opt) {
         }
       }
     }
-  # } else if(opt$adhoc) {
-  #   errors <- c(errors, paste0("Error: --exome not passed while in ad-hoc mode."))
+    # } else if(opt$adhoc) {
+    #   errors <- c(errors, paste0("Error: --exome not passed while in ad-hoc mode."))
   } else {
     errors <- c(errors, paste0("Error: --exome not specified."))
   }
@@ -316,35 +259,6 @@ fixOpts <- function(opt) {
   # check priorities
   if(length(opt$priorities) > 0) {
     warnings <- c(warnings, paste0("Warning: Deprecated option --priorities specified. Ignoring."))
-  #   if(length(opt$priorities) > 1) {
-  #     opt$priorities <- opt$priorities[1]
-  #     warnings <- c(warnings, paste0("Warning: --priorities received more than one argument. Using first value only: ", opt$priorities, "."))
-  #   }
-  #   if(!file.exists(opt$priorities)) {
-  #     opt$priorities_glob <- Sys.glob(paste0(opt$priorities, "*"))
-  #     if(length(opt$priorities_glob) == 0) {
-  #       errors <- c(errors, paste0("Error: --priorities ", opt$priorities, " not found."))
-  #     } else {
-  #       opt$priorities <- opt$priorities_glob
-  #       warnings <- c(warnings, paste0("Warning: --priorities accepted as globbed argument ", opt$priorities))
-  #     }
-  #   }
-  #   if(file.exists(opt$priorities)) {
-  #     opt$priorities_headers <- names(fread(opt$priorities, nrows = 0))
-  #     if(!("Symbol" %in% opt$priorities_headers)) {
-  #       errors <- c(errors, paste0("Error: --priorities ", opt$priorities, " doesn't look like a feature priorities file. Expected a `Symbol` column."))
-  #     }
-  #     if(!("Gene Type" %in% opt$priorities_headers)) {
-  #       errors <- c(errors, paste0("Error: --priorities ", opt$priorities, " doesn't look like a feature priorities file. Expected a `Gene Type` column."))
-  #     }
-  #   }
-  #   if(length(opt$harm) == 0) {
-  #     warnings <- c(warnings, paste0("Warning: --priorities passed without --harm. Ignoring."))
-  #   }
-  # } else if(length(opt$harm) > 0) {
-  #   if(opt$harm != 0) {
-  #     errors <- c(errors, paste0("Error: --priorities not passed while --harm passed."))
-  #   }
   }
   
   # check control
@@ -383,28 +297,33 @@ fixOpts <- function(opt) {
     warnings <- c(warnings, paste0("Warning: --control passed without --control_type. Assuming --control_type for ", opt$control, " is ", opt$control_type, "."))
   }
   
-    # check expression
-    if(length(opt$expression) > 0) {
-      if(length(opt$expression) > 1) {
-        opt$expression <- opt$expression[1]
-        warnings <- c(warnings, paste0("Warning: --expression received more than one argument. Using first value only: ", opt$expression, "."))
-      }
-      if(!file.exists(opt$expression)) {
-        opt$expression_glob <- Sys.glob(paste0(opt$expression, "*"))
-        if(length(opt$expression_glob) == 0) {
-          errors <- c(errors, paste0("Error: --expression ", opt$expression, " not found."))
-          opt$expression <- NULL
-        } else {
-          opt$expression <- opt$expression_glob
-          warnings <- c(warnings, paste0("Warning: --expression accepted as globbed argument ", opt$expression, "."))
-        }
-      }
-      if(!isFile(opt$expression)) {
-        errors <- c(errors, paste0("Error: --expression ", opt$expression, " is not a file."))
-        opt$expression <- NULL
-      }
+  # check expression cutoff
+  if(any(length(opt$exprcutoff) > 0, opt$exprcutoff == "", is.na(opt$exprcutoff))) {
+    if(length(opt$exprcutoff) > 1) {
+      opt$exprcutoff <- opt$exprcutoff[1]
+      warnings <- c(warnings, paste0("Warning: --expression_cutoff received more than one argument. Using first value only: ", opt$exprcutoff, "."))
     }
-    
+    if(!(class(opt$exprcutoff) == "numeric")) {
+      warnings <- c(warnings, paste0("Warning: --expression_cutoff ", opt$exprcutoff, " is not a number. Setting to the default of 10."))
+      opt$exprcutoff <- 10
+    }
+  }
+  
+  # check expression
+  if(any(length(opt$expression) > 0, opt$expression != "", !is.na(opt$expression))) {
+    if(length(opt$expression) > 1) {
+      opt$expression <- opt$expression[1]
+      warnings <- c(warnings, paste0("Warning: --expression received more than one argument. Using first value only: ", opt$expression, "."))
+    }
+    if(!isFile(opt$expression)) {
+      warnings <- c(warnings, paste0("Warning: --expression ", opt$expression, " is not a file. Ignoring."))
+      opt$expression <- NULL
+    }
+  } else {
+    opt$expression <- NULL
+  }
+  
+  
   # check ref
   if(length(opt$ref) > 0) {
     ref = paste0("
@@ -420,18 +339,6 @@ fixOpts <- function(opt) {
     options(show.error.messages = FALSE)
     stop()
   }
-  
-  # remove temporary options
-  opt$infile_glob <- NULL
-  opt$infile_headers <- NULL
-  opt$library_glob <- NULL
-  opt$library_headers <- NULL
-  opt$genome_glob <- NULL
-  opt$exome_glob <- NULL
-  opt$exome_headers <- NULL
-  opt$mode_tolower <- NULL
-  opt$priorities_glob <- NULL
-  opt$priorities_headers <- NULL
   
   # print warnings and errors
   if(length(warnings) > 0) {

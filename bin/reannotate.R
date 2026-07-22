@@ -20,7 +20,7 @@ reannotateLib <- function(opt) {
                   file_exorcise_master_out = paste0(opt$outdir, "/exorcise.tsv"))
     
     # If specified, mask low expression genes
-    if(length(opt$expression) > 0) {
+    if(!is.null(opt$expression)) {
       authors <- maskLowExpression(opt, authors)
     }
     
