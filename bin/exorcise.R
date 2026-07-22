@@ -50,8 +50,9 @@
 # 1.5.3         2024-10-21T17:23:06   fix guide ids in BE mode
 # 1.6           2025-10-29T19:35:35   support bystander edits in BE mode
 # 2.0           2026-07-21T16:19:30   restructure, enable expression mask, remove support for harmonisation and post-hoc mode
+# 2.0.1         2026-07-22T11:48:10   allow expression file to be optional; remove support for globbed inputs
 
-ver <- "2.0"
+ver <- "2.0.1"
 
 #### INIT ####
 suppressWarnings(suppressMessages({
@@ -91,7 +92,7 @@ if (interactive()) {
   #opt$library <-          NULL
   opt$ref <-               NULL
   opt$expression <-        NULL
-  opt$expression_cutoff <- NULL
+  opt$exprcutoff <-        NULL
   source("common.R")
   source("reannotate.R")
   source("preprocess.R")
@@ -167,7 +168,7 @@ if (!interactive()) {
                 help = "No longer used.", metavar = "character"),
     make_option(opt_str = c("-x", "--expression"), type = "character", default = NULL,
                 help = "(optional) File with expression values.", metavar = "character"),
-    make_option(opt_str = c("-k", "--expression_cutoff"), type = "character", default = 10,
+    make_option(opt_str = c("-k", "--exprcutoff"), type = "character", default = 10,
                 help = "(optional) Value indicating low expression (default: 10)", metavar = "character"),
     make_option(opt_str = c("-c", "--control"), type = "character", default = NULL,
                 help = "(optional) Pattern indicating a control guide (comma-separated list).", metavar = "character"),

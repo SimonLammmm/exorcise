@@ -18,7 +18,7 @@ importAuthorsLib <- function(opt) {
 maskLowExpression <- function(opt, authors) {
   log_info("Using ", opt$expression, " to mask out low expressing genes...")
   expression <- fread(opt$expression) %>% setNames(c("exo_orig", "expression"))
-  low_genes <- expression$exo_orig[expression$expression < opt$expression_cutoff]
+  low_genes <- expression$exo_orig[expression$expression < opt$exprcutoff]
   authors <- authors %>%
     filter(!(exo_orig %in% low_genes))
   return(authors)
