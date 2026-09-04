@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "exorcise-screens"
+version = "3.0.0"
+description = "CRISPR screen read counting, analysis and database building, alongside Exorcise"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "CC0-1.0" }
+authors = [
+    { name = "Simon Lam", email = "sl681@cam.ac.uk" },
+    { name = "John C. Thomas", email = "jcthomas000@gmail.com" },
+]
+
+# Kept deliberately short. The previous packages between them declared
+# statsmodels, xlsxwriter, scikit-learn, pyaml, dash, dash-bootstrap-components,
+# dash-bio, plotly and flask, none of which any reachable code imported.
+dependencies = [
+    "numpy",
+    "pandas",
+    "scipy",
+    "attrdictionary",
+    "openpyxl",       # the engine pandas uses for .xlsx workbooks
+    "sqlalchemy>=2",
+    "loguru",
+    "h5py",           # reads the Chronos gene effect models
+]
+
+[project.optional-dependencies]
+chronos = ["crispr_chronos"]
+
+[project.scripts]
+# Current names.
+exorcise-count = "exorcise_screens.cli:count_entry"
+exorcise-analyse = "exorcise_screens.cli:analyse_entry"
+exorcise-database = "exorcise_screens.cli:database_entry"
+
+# Deprecated names, honoured with a warning. See exorcise_screens/deprecation.py.
+count_reads = "exorcise_screens.cli:deprecated_count_reads"
+"count_reads.py" = "exorcise_screens.cli:deprecated_count_reads"
+crispr_pipeline = "exorcise_screens.cli:deprecated_crispr_pipeline"
+"crispr_pipeline.py" = "exorcise_screens.cli:deprecated_crispr_pipeline"
+crispr-screen-viewer = "exorcise_screens.cli:deprecated_crispr_screen_viewer"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["exorcise_screens*"]

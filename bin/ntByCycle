@@ -1,3 +1,8 @@
-#!/bin/bash
-
-ntByCycle.R "$@"
+#!/usr/bin/env bash
+# Deprecated name for exorcise-trace. Honoured, but warns.
+set -euo pipefail
+here="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+cat >&2 <<'EOF'
+WARNING: `ntByCycle` is deprecated and will be removed in a future release. It still works. Use `exorcise-trace` instead.
+EOF
+exec "${here}/exorcise-trace.R" "$@"

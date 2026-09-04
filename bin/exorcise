@@ -1,3 +1,5 @@
-#!/bin/bash
-
-exorcise.R "$@"
+#!/usr/bin/env bash
+# Thin wrapper so that `exorcise` works wherever bin/ sits on the PATH.
+set -euo pipefail
+here="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+exec "${here}/exorcise.R" "$@"
