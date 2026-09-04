@@ -1,57 +1,176 @@
-# Change this for the Exorcise image you are using
-EXORCISE_IMAGE="simonlammmm/exorcise:1.5.3.1_arm64"
+# Example commands for the whole Exorcise toolchain.
+#
+# Run these from the root of the repository. Every command bind mounts the
+# current directory at /data inside the container, so paths are relative to
+# wherever you invoke docker from.
 
-# Get human genome
-curl -O "https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/hg38.2bit"
-mv hg38.2bit data/
+# Change this for the exorcise image you are using.
+# See https://hub.docker.com/r/simonlammmm/exorcise/tags
+EXORCISE_IMAGE="simonlammmm/exorcise:3.0.0"
 
-# Get exome annotations
-curl -O "https://raw.githubusercontent.com/SimonLammmm/exorcise/main/data/hsa.grch38.refseqall.tsv.gz"
-mv hsa.grch38.refseqall.tsv.gz data/
+# Or build it from this working tree. Note that the build context is the
+# repository root, so the Dockerfile has to be named explicitly.
+docker build -f docker/Dockerfile -t simonlammmm/exorcise .
 
-# Get priorities
-curl -O "https://raw.githubusercontent.com/SimonLammmm/exorcise/main/data/hsa.priorities.tsv.gz"
-mv hsa.priorities.tsv.gz data/
+#### Reference data ####
 
-# Exorcise a library
+# Human genome, GRCh38, in 2bit format (about 800 MB).
+curl -L -o data/hg38.2bit "https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/hg38.2bit"
+
+# The human exome annotation is already bundled in data/. This is where it came
+# from if you need to refresh it.
+curl -L -o data/hsa.grch38.refseqall.tsv.gz \
+  "https://raw.githubusercontent.com/SimonLammmm/exorcise/main/data/hsa.grch38.refseqall.tsv.gz"
+
+#### 1. Exorcise a library ####
+
+# CRISPR knockout. Sequences are in column 7 and the authors' own gene symbols
+# are in column 2.
 docker run --rm -v .:/data $EXORCISE_IMAGE exorcise \
-  -i example/example-exorcise-input.tsv.gz \
-  -o exorcise-output/ \
-  -z NGG \
-  -q ko \
-  -g 7 \
-  -n 2 \
-  -v data/hg38.2bit \
-  -w data/hsa.grch38.refseqall.tsv.gz \
-  -y data/hsa.priorities.tsv.gz
+  --infile example/example-exorcise-input.tsv.gz \
+  --outdir exorcise-output/ \
+  --seq 7 \
+  --harm 2 \
+  --pam NGG \
+  --mode ko \
+  --genome data/hg38.2bit \
+  --exome data/hsa.grch38.refseqall.tsv.gz
 
-# Draw a nucleotide trace
-docker run --rm -v .:/data $EXORCISE_IMAGE ntByCycle \
-  -f example/example-fastq.fastq.gz \
-  -n 10000 \
-  -o ntByCycle-output/
+# CRISPR interference: annotate guides with any gene within 500 bases.
+docker run --rm -v .:/data $EXORCISE_IMAGE exorcise \
+  --infile example/example-exorcise-input.tsv.gz \
+  --outdir exorcise-crispri-output/ \
+  --seq 7 --harm 2 --pam NGG --mode i \
+  --genome data/hg38.2bit \
+  --exome data/hsa.grch38.refseqall.tsv.gz
 
-# Generate counts table from NGS reads
-docker run --rm -v .:/data $EXORCISE_IMAGE count_reads \
-  -s 0,20 \
-  -g exo_seq \
-  -n exo_symbol \
-  -j exo_id \
-  -p count_reads-output/runName \
-  --just-go \
-  --library=example/example-library.tsv.gz \
+# Name the control guides. Anything matching /NO_CURRENT|^NonTargeting/ in the
+# --harm column that fails to hit an exon is labelled accordingly.
+docker run --rm -v .:/data $EXORCISE_IMAGE exorcise \
+  --infile example/example-exorcise-input.tsv.gz \
+  --outdir exorcise-controls-output/ \
+  --seq 7 --harm 2 --pam NGG \
+  --genome data/hg38.2bit \
+  --exome data/hsa.grch38.refseqall.tsv.gz \
+  --control "NO_CURRENT,^NonTargeting" \
+  --control_type "Unmapped,NonTargeting"
+
+# Cytosine base editor. Base editor modes need an exome carrying CDS
+# coordinates and exon frames, which the bundled five-column exome does not
+# have: download a full UCSC Table Browser refGene table for these.
+docker run --rm -v .:/data $EXORCISE_IMAGE exorcise \
+  --infile example/example-exorcise-input.tsv.gz \
+  --outdir exorcise-cbe-output/ \
+  --seq 7 --harm 2 --pam NGG --mode cbe \
+  --genome data/hg38.2bit \
+  --exome data/hsa.grch38.refgene.full.tsv.gz
+
+# Drop guides against genes the sample barely expresses. The expression file is
+# two columns: gene symbol, then value.
+docker run --rm -v .:/data $EXORCISE_IMAGE exorcise \
+  --infile example/example-exorcise-input.tsv.gz \
+  --outdir exorcise-expressed-output/ \
+  --seq 7 --harm 2 --pam NGG \
+  --genome data/hg38.2bit \
+  --exome data/hsa.grch38.refseqall.tsv.gz \
+  --expression data/my-cell-line-expression.tsv \
+  --exprcutoff 10
+
+#### 2. Find the guide region in your reads ####
+
+# Plot nucleotide frequency by cycle. The guide region is where the trace stops
+# being flat.
+docker run --rm -v .:/data $EXORCISE_IMAGE exorcise-trace \
+  --file example/example-fastq.fastq.gz \
+  --nrows 10000 \
+  --out trace-output/
+
+#### 3. Count reads ####
+
+# Guides sit at bases 0-20 of each read. Passing --library also writes a mapped
+# counts table to count-output/runName.counts.tsv.
+docker run --rm -v .:/data $EXORCISE_IMAGE exorcise-count \
+  --slice 0,20 \
+  --prefix count-output/runName \
+  --library example/example-library.tsv.gz \
+  --seqhdr exo_seq \
+  --guidehdr exo_id \
+  --genehdr exo_symbol \
   example/example-fastq.fastq.gz
 
-# Run batch CRISPR analysis
-docker run --rm -v .:/data $EXORCISE_IMAGE crispr_pipeline \
+# Also count reads that are one substitution from a library guide, where that
+# guide is the only thing they could have come from.
+docker run --rm -v .:/data $EXORCISE_IMAGE exorcise-count \
+  --slice 0,20 \
+  --prefix count-mismatch-output/runName \
+  --library example/example-library.tsv.gz \
+  --seqhdr exo_seq --guidehdr exo_id --genehdr exo_symbol \
+  --allow-mismatch \
+  example/example-fastq.fastq.gz
+
+#### 4. Analyse the screen ####
+
+# The workbook describes the samples, the comparisons and which methods to run.
+# Start from example/example-analysis-workbook-template.xlsx.
+docker run --rm -v .:/data $EXORCISE_IMAGE exorcise-analyse \
   --counts example/ \
-  --output-dir crispr_pipeline-output/ \
+  --output-dir analyse-output/ \
   example/example-crispr-pipeline.xlsx
 
-# Add CRISPR analysis results to database
-docker run --rm -v .:/data $EXORCISE_IMAGE crispr-screen-viewer database \
-  --out-dir crispr-screen-viewer-output/ \
-  --results-dir crispr_pipeline-output/ \
-  --counts-dir example/ \
-  --new \
+# Validate the workbook without running anything.
+docker run --rm -v .:/data $EXORCISE_IMAGE exorcise-analyse \
+  --counts example/ \
+  --output-dir analyse-output/ \
+  --dry-run \
   example/example-crispr-pipeline.xlsx
+
+# Run only MAGeCK, skipping the other methods named in the workbook.
+docker run --rm -v .:/data $EXORCISE_IMAGE exorcise-analyse \
+  --counts example/ \
+  --output-dir analyse-output/ \
+  --skip-method drugz,chronos \
+  example/example-crispr-pipeline.xlsx
+
+#### 5. Build the results database ####
+
+docker run --rm -v .:/data $EXORCISE_IMAGE exorcise-database \
+  --out-dir database-output/ \
+  --results-dir analyse-output/ \
+  --counts-dir example/ \
+  --new-db \
+  example/example-crispr-pipeline.xlsx
+
+# --new-db over a database that already exists asks before replacing it, and
+# `docker run` gives no terminal to answer with unless you pass -it. Either
+# allocate one:
+docker run --rm -it -v .:/data $EXORCISE_IMAGE exorcise-database \
+  --out-dir database-output/ \
+  --results-dir analyse-output/ \
+  --counts-dir example/ \
+  --new-db \
+  example/example-crispr-pipeline.xlsx
+
+# ...or say up front that replacing it is fine, which is what you want in a
+# script or a scheduled job.
+docker run --rm -v .:/data $EXORCISE_IMAGE exorcise-database \
+  --out-dir database-output/ \
+  --results-dir analyse-output/ \
+  --counts-dir example/ \
+  --new-db --force-overwrite \
+  example/example-crispr-pipeline.xlsx
+
+# Add another experiment to a database that already exists. No --new-db, so
+# nothing is replaced and no confirmation is needed.
+docker run --rm -v .:/data $EXORCISE_IMAGE exorcise-database \
+  --out-dir database-output/ \
+  --results-dir analyse-output/ \
+  --counts-dir example/ \
+  example/another-experiment.xlsx
+
+#### Deprecated command names ####
+
+# These still work and do exactly the same thing, but print a warning.
+#   ntByCycle                     -> exorcise-trace
+#   count_reads                   -> exorcise-count
+#   crispr_pipeline               -> exorcise-analyse
+#   crispr-screen-viewer database -> exorcise-database

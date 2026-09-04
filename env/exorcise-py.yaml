@@ -1,0 +1,33 @@
+# Python environment for exorcise-count, exorcise-analyse and exorcise-database.
+#
+# Separate from env/exorcise.yaml (the R side) so that a dependency conflict in
+# one cannot block the other. MAGeCK and RRA live here because the analysis
+# pipeline shells out to them.
+#
+# The Dash web stack that crispr_screen_viewer needed is gone: dash,
+# dash-bootstrap-components, dash-bio, plotly and flask were all pulled in by a
+# single top-level `from dash import html` in a module whose only used functions
+# never touched Dash.
+name: exorcise-py
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.10.20
+  # Analysis
+  - mageck=0.5.9.5
+  - numpy=1.26.4
+  - pandas=2.2.3
+  - scipy=1.15.2
+  # Chronos, which fits growth models. TensorFlow is its doing.
+  - tensorflow=2.18.0
+  - h5py=3.12.1
+  # Workbooks and the results database
+  - openpyxl=3.1.5
+  - sqlalchemy=2.0.36
+  # Odds and ends
+  - loguru=0.7.3
+  - pip=24.2
+  - pip:
+      - attrdictionary
+      - crispr_chronos

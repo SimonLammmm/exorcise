@@ -1,63 +1,80 @@
-# Preamble
-FROM ubuntu:latest
-#FROM --platform=linux/amd64 ubuntu:latest
+# Exorcise: the whole toolchain in one image.
+#
+# Builds from the working tree, not from GitHub, so what you have checked out is
+# what you get. That means the build context is the repository root and the
+# Dockerfile has to be named explicitly:
+#
+#   docker build -f docker/Dockerfile -t simonlammmm/exorcise .
+#
+# For an architecture other than the host's:
+#
+#   docker buildx build --platform linux/amd64 -f docker/Dockerfile \
+#     -t simonlammmm/exorcise:amd64 .
+#
+# Two conda environments, one per language. They are created in separate layers
+# so that changing the R dependencies does not rebuild TensorFlow, and neither
+# rebuilds when only source files change.
+
+FROM ubuntu:24.04
+
+SHELL ["/bin/bash", "-c"]
+ENV DEBIAN_FRONTEND=noninteractive
+ENV MAMBA_ROOT=/opt/miniforge3
+ENV EXORCISE_HOME=/exorcise
 
 WORKDIR /
-SHELL ["/bin/bash", "-c"]
 
-# Install dependencies
+# System dependencies. curl fetches Miniforge; g++ is needed to build a couple
+# of the R and Python packages from source when no wheel is available.
 RUN apt-get update && \
-  apt-get install --no-install-recommends -y \
-  curl \
-  git \
-  g++ \
-  ca-certificates && \
+    apt-get install --no-install-recommends -y \
+      ca-certificates \
+      curl \
+      g++ && \
+    rm -rf /var/lib/apt/lists/*
 
-# Install Miniforge
-  curl -L -O "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-$(uname)-$(uname -m).sh" && \
-  bash Miniforge3-$(uname)-$(uname -m).sh -b -p /opt/miniforge3/ && \
+# Miniforge, which provides conda, mamba and conda-forge by default.
+RUN curl -fsSL -O "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-$(uname)-$(uname -m).sh" && \
+    bash "Miniforge3-$(uname)-$(uname -m).sh" -b -p "${MAMBA_ROOT}" && \
+    rm -f Miniforge*.sh
 
-# Install Exorcise
-  git clone https://github.com/SimonLammmm/exorcise && \
-  /opt/miniforge3/bin/mamba env create -f /exorcise/env/exorcise.yaml -y python=3.12 && \
-  export PATH=$PATH:/exorcise/bin && \
-# Patch the Exorcise main script to use the blat installation in Miniforge
-  sed -i 's/blat_command <- "blat"/blat_command <- "\/opt\/miniforge3\/envs\/exorcise\/bin\/blat"/g' /exorcise/bin/psl.R && \
-  sed -i 's/twoBitToFa_command <- "twoBitToFa"/twoBitToFa_command <- "\/opt\/miniforge3\/envs\/exorcise\/bin\/twoBitToFa"/g' /exorcise/bin/psl.R && \
+# The two environments. Only the yaml files are copied at this point, so editing
+# any source file leaves both of these layers cached.
+COPY env/exorcise.yaml /tmp/env/exorcise.yaml
+RUN "${MAMBA_ROOT}/bin/mamba" env create -f /tmp/env/exorcise.yaml -y && \
+    "${MAMBA_ROOT}/bin/mamba" clean --all -y
 
-# Install crispr_tools
-  git clone https://github.com/SimonLammmm/crispr_tools.git && \
-# Patch the crispr_pipeline script to use the MAGeCK installation in Miniforge
-  sed -i 's/mageck test/\/opt\/miniforge3\/envs\/crispr_tools\/bin\/mageck test/g' /crispr_tools/crispr_tools/crispr_pipeline.py && \
-  sed -i 's/which mageck/which \/opt\/miniforge3\/envs\/crispr_tools\/bin\/mageck/g' /crispr_tools/crispr_tools/crispr_pipeline.py && \
-  sed -i 's/"mageck", "-v"/"\/opt\/miniforge3\/envs\/crispr_tools\/bin\/mageck", "-v"/g' /crispr_tools/crispr_tools/crispr_pipeline.py && \
-  /opt/miniforge3/bin/mamba env create -f /crispr_tools/env/crispr_tools.yaml -y && \
-  /opt/miniforge3/envs/crispr_tools/bin/pip install /crispr_tools/. && \
-# Patch the MAGeCK script to use RRA installation in Miniforge
-  sed -i "s/rrapath='RRA'/rrapath='\/opt\/miniforge3\/envs\/crispr_tools\/bin\/RRA'/g" /opt/miniforge3/envs/crispr_tools/lib/python3.10/site-packages/mageck/crisprFunction.py && \
+COPY env/exorcise-py.yaml /tmp/env/exorcise-py.yaml
+RUN "${MAMBA_ROOT}/bin/mamba" env create -f /tmp/env/exorcise-py.yaml -y && \
+    "${MAMBA_ROOT}/bin/mamba" clean --all -y && \
+    rm -rf "${MAMBA_ROOT}/pkgs" /tmp/env
 
-# Install crispr_screen_viewer
-  git clone https://github.com/johncthomas/crispr_screen_viewer.git && \
-  /opt/miniforge3/bin/mamba create -n crispr_screen_viewer python=3.10.20 -y && \
-  /opt/miniforge3/envs/crispr_screen_viewer/bin/pip install /crispr_screen_viewer/. scipy==1.15.2 && \
+# The Python environment goes on the PATH so that MAGeCK finds RRA, and the
+# pipeline finds MAGeCK, without anything being patched. Earlier versions rewrote
+# three source files with sed at build time to hard-code these paths.
+ENV PATH="${MAMBA_ROOT}/envs/exorcise-py/bin:${PATH}"
 
-# Clean up
-  /opt/miniforge3/bin/mamba clean --all -y && \
-  rm -rf /opt/miniforge3/pkgs && \
-  rm /Miniforge*.sh && \
-  rm -rf /exorcise/data && \
-  rm -rf /exorcise/env && \
-  rm -rf /exorcise/example && \
-  rm -rf /exorcise/manuscript && \
-  rm -rf /crispr_tools/det && \
-  rm -rf /crispr_tools/doc && \
-  rm -rf /crispr_tools/env && \
-  rm -rf /crispr_tools/files && \
+# BLAT and twoBitToFa live in the R environment, which is not on the PATH.
+# Exorcise reads these rather than being patched.
+ENV EXORCISE_BLAT="${MAMBA_ROOT}/envs/exorcise/bin/blat"
+ENV EXORCISE_TWOBITTOFA="${MAMBA_ROOT}/envs/exorcise/bin/twoBitToFa"
 
-# Install entrypoint
-  chmod +x /exorcise/docker/entrypoint.sh
+# Now the source. env/ is included so the pinned versions can be inspected from
+# inside a running container, and data/ because the bundled human exome is small
+# and immediately useful. example/ and manuscript/ are not copied.
+COPY R/ ${EXORCISE_HOME}/R/
+COPY bin/ ${EXORCISE_HOME}/bin/
+COPY py/ ${EXORCISE_HOME}/py/
+COPY env/ ${EXORCISE_HOME}/env/
+COPY data/ ${EXORCISE_HOME}/data/
+COPY docker/entrypoint.sh ${EXORCISE_HOME}/docker/entrypoint.sh
+COPY README.md CHANGELOG.md LICENSE ${EXORCISE_HOME}/
+
+RUN chmod +x "${EXORCISE_HOME}"/bin/* "${EXORCISE_HOME}/docker/entrypoint.sh" && \
+    "${MAMBA_ROOT}/envs/exorcise-py/bin/pip" install --no-cache-dir "${EXORCISE_HOME}/py"
+
 ENTRYPOINT ["/exorcise/docker/entrypoint.sh"]
 
-# Mount working directory
+# Bind mount your working directory here.
 VOLUME ["/data/"]
 WORKDIR /data/
