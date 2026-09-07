@@ -68,6 +68,30 @@ def _fill_blanks(frame):
         return frame.fillna("")
 
 
+def read_experiment_id(fn) -> str:
+    """The experiment's name, read from the Experiment details sheet alone.
+
+    Deliberately lighter than constructing an AnalysisWorkbook. Removing an
+    experiment from a database needs only its ID, and should not fail because
+    some sheet it will never look at is malformed or absent.
+    """
+    details = _fill_blanks(
+        pd.read_excel(fn, sheet_name="Experiment details", header=None, index_col=0)[1]
+    )
+
+    # "Analysis name" is the legacy label for the same field.
+    for label in ("Experiment name", "Analysis name"):
+        if label in details.index:
+            value = str(details[label]).strip()
+            if value:
+                return value
+
+    raise KeyError(
+        f'{fn} has no non-empty "Experiment name" row in its "Experiment '
+        f'details" sheet, so the experiment cannot be identified.'
+    )
+
+
 class AnalysisWorkbook:
     """An analysis workbook, and the configuration dictionary it describes."""
 

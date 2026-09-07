@@ -1,5 +1,73 @@
 # Changelog
 
+## 3.1.0
+
+### Added
+
+- `exorcise-database --remove` removes experiments from a database, restoring
+  the capability that `crispr-screen-viewer remove` provided before 3.0.0. The
+  underlying functions were carried over in 3.0.0 but nothing reached them.
+
+  Targets may be given either as analysis workbooks, in which case the
+  experiment ID is read from the workbook's "Experiment name", or as experiment
+  IDs directly. Workbooks are usually what you have to hand, since that is what
+  the experiment was added with; IDs are what `experiments_metadata.csv.gz`
+  lists, and what the old command took.
+
+  ```bash
+  exorcise-database --remove --out-dir db/ my-screen.xlsx
+  exorcise-database --remove --out-dir db/ my-experiment-id
+  ```
+
+  Removal asks for confirmation, subject to the same rules as replacing a
+  database with `--new-db`: the prompt only appears when stdin is a terminal,
+  and `--force-overwrite` skips it. Without either, it refuses rather than
+  proceeding. Experiments named but absent from the database are reported and
+  skipped rather than being treated as an error.
+
+  Statistics rows and both metadata tables are pruned. Gene records are left
+  alone, since they are shared between experiments and hold no per-experiment
+  data.
+
+- `crispr-screen-viewer remove DB_DIR EXP_ID...` works again, with a deprecation
+  warning, and is translated to
+  `exorcise-database --remove --out-dir DB_DIR EXP_ID...`. The old form took the
+  database directory as its first positional argument, so this needed argument
+  rearrangement rather than the argument-stripping the other deprecated names
+  use; `deprecation.py` now supports per-subcommand translation.
+
+- `crispr-screen-viewer launch`, `genes` and `test` now fail with a message
+  saying they went with the Dash web viewer in 3.0.0, rather than being passed
+  through to `exorcise-database` as if they were arguments.
+
+- `read_experiment_id()` reads an experiment's name from a workbook's
+  "Experiment details" sheet alone. Removing an experiment needs nothing else,
+  and should not fail because some sheet it will never consult is malformed.
+
+### Changed
+
+- The project version is now written down once, in the `VERSION` file at the
+  root. Releasing means editing that file and nothing else. It had been repeated
+  in four places — `bin/exorcise.R`, `bin/exorcise-trace.R`, `py/pyproject.toml`
+  and `py/exorcise_screens/__init__.py` — of which only `pyproject.toml` was
+  load-bearing for the image tag, so the others could drift unnoticed until
+  `exorcise --version` disagreed with the tag it shipped under. They had already
+  drifted once: `bin/exorcise.R` reached 3.0.1 while everything else said 3.0.0.
+
+  Both R entry points read it through `R/version.R`, the Python package through
+  `exorcise_screens.__version__`, `pyproject.toml` derives the package version
+  from that attribute, and `docker/build-and-push.sh` reads the file directly.
+
+- `bin/exorcise.R` locates its installation root rather than its `R/` directory,
+  since it now needs both the modules and the version from there. `exorcise-trace`
+  gained the same lookup; it sources only `R/version.R`, which depends on nothing,
+  so it still does not load the Bioconductor stack.
+
+### Fixed
+
+- `--remove` together with `--new-db` is rejected, rather than silently letting
+  one win.
+
 ## 3.0.0
 
 crispr_tools and crispr_screen_viewer are no longer pulled from GitHub at build

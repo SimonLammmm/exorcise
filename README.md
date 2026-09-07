@@ -61,15 +61,17 @@ projects. They now live in `py/` as one package.
 The commands were renamed in 3.0.0. Every old name still works and behaves
 identically; each prints a warning naming its replacement.
 
-| Old name                        | Use instead          |
-|---------------------------------|----------------------|
-| `ntByCycle`                     | `exorcise-trace`     |
-| `count_reads`                   | `exorcise-count`     |
-| `crispr_pipeline`               | `exorcise-analyse`   |
-| `crispr-screen-viewer database` | `exorcise-database`  |
+| Old name                                    | Use instead                                        |
+|---------------------------------------------|----------------------------------------------------|
+| `ntByCycle`                                 | `exorcise-trace`                                   |
+| `count_reads`                               | `exorcise-count`                                   |
+| `crispr_pipeline`                           | `exorcise-analyse`                                 |
+| `crispr-screen-viewer database`             | `exorcise-database`                                |
+| `crispr-screen-viewer remove DB_DIR ID...`  | `exorcise-database --remove --out-dir DB_DIR ID...`|
 
-`crispr-screen-viewer` only ever accepted `database` here. Its other
-subcommands, and the Dash web viewer, are not part of this project.
+`crispr-screen-viewer` accepts `database` and `remove` here. Its `launch`,
+`genes` and `test` subcommands went with the Dash web viewer, which is not part
+of this project.
 
 ## Installation
 
@@ -390,14 +392,15 @@ exorcise-database --out-dir db/ --results-dir results/ --counts-dir counts/ \
 
 | Long flag (short)        | Required | Description                                                        |
 |--------------------------|----------|--------------------------------------------------------------------|
-| `details_xlsx`           | Yes      | One or more analysis workbooks.                                     |
-| `--out-dir` (`-o`)       | Yes      | Where the database and metadata are written.                        |
+| `details_xlsx`           | Yes      | One or more analysis workbooks. With `--remove`, experiment IDs are also accepted. |
+| `--out-dir` (`-o`)       | Yes      | The database directory: where it is written, or the one to remove from. |
 | `--results-dir` (`-r`)   | No       | Directory holding the analysis results. Default `results`.           |
 | `--counts-dir` (`-c`)    | No       | Directory holding the counts files. Default `counts`.                |
 | `--filename-prefix` (`-p`)| No      | Prefix the analysis files were written with. Default `result`.        |
 | `--new-db` (`-n`)        | No       | Create a new database rather than adding to one.                     |
+| `--remove`               | No       | Remove the named experiments instead of adding them.                  |
 | `--update-existing` (`-u`)| No      | Replace experiments already present instead of skipping them.         |
-| `--force-overwrite` (`-f`)| No      | With `--new-db`, replace existing files without asking.               |
+| `--force-overwrite` (`-f`)| No      | Skip the confirmation prompt for a destructive action.                |
 | `--verbosity` (`-v`)     | No       | 0 warnings, 1 info, 2 debug. Default 1.                              |
 
 It writes `database.db`, `experiments_metadata.csv.gz` and
@@ -409,10 +412,33 @@ script or a scheduled job add `--force-overwrite`. Without either, it refuses an
 leaves the database alone rather than proceeding. Omit `--new-db` altogether to
 add to the existing database instead of replacing it.
 
+### Removing an experiment
+
+`--remove` takes an experiment out of a database. Name it either by the workbook
+you added it with, or by its experiment ID:
+
+```bash
+exorcise-database --remove --out-dir db/ my-screen.xlsx
+exorcise-database --remove --out-dir db/ my-experiment-id
+```
+
+Anything ending `.xlsx` is read as a workbook and its "Experiment name" is used;
+anything else is taken as an ID literally. The IDs in a database are listed in
+its `experiments_metadata.csv.gz`. Several may be given at once.
+
+This removes the experiment's statistics and its rows from both metadata tables.
+Gene records stay, because they are shared between experiments. Experiments you
+name that are not in the database are reported and skipped, not treated as
+errors.
+
+Like `--new-db`, removal asks first, needs `-it` under `docker run` to be
+answerable, and takes `--force-overwrite` to proceed unattended.
+
 ## Repository layout
 
 | Path          | Contents                                                                        |
 |---------------|---------------------------------------------------------------------------------|
+| `VERSION`     | The project version. The only place it is written down; see below.                |
 | `bin/`        | The executables, including shims for the deprecated names.                        |
 | `R/`          | The Exorcise pipeline, sourced by `bin/exorcise.R`.                              |
 | `py/`         | `exorcise_screens`: counting, analysis and the database builder.                   |
@@ -421,6 +447,27 @@ add to the existing database instead of replacing it.
 | `data/`       | A bundled human exome annotation.                                                |
 | `example/`    | Example inputs, a workbook template, and commands for every step.                  |
 | `manuscript/` | Analysis scripts for the 2024 paper. Pinned; not maintained alongside the rest.    |
+
+## Versioning
+
+The whole project ships together under one version, and that version is written
+down once, in the `VERSION` file at the root. To release a new version, edit that
+file and nothing else.
+
+Everything else derives from it:
+
+| Reads it | How |
+|----------|-----|
+| `exorcise --version`         | `R/version.R`, via the installation root |
+| `exorcise-trace --version`   | `R/version.R`, via the installation root |
+| `exorcise-count`, `-analyse`, `-database` `--version` | `exorcise_screens.__version__` |
+| The Python package version   | `pyproject.toml` derives it from that attribute at build time |
+| The Docker image tag         | `docker/build-and-push.sh` reads the file directly |
+
+Both R entry points locate the root by looking for `R/version.R` next to
+themselves, or wherever `EXORCISE_HOME` points. The Python package reads the file
+when running from a checkout and falls back to its installed package metadata,
+which was written from the same file at build time, when the file is not present.
 
 ## About
 

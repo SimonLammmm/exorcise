@@ -13,8 +13,6 @@
 # Source:  https://github.com/SimonLammmm/exorcise
 # Licence: Creative Commons Zero v1.0 Universal
 
-TRACE_VERSION <- "1.0.0"
-
 suppressWarnings(suppressMessages({
   library(optparse)
   library(logger)
@@ -26,6 +24,43 @@ suppressWarnings(suppressMessages({
 }))
 
 FASTQ_PATTERN <- "\\.(fastq|fq)(\\.gz)?$"
+
+
+# Find the root of this installation, the directory holding R/, bin/ and
+# VERSION. The same bootstrap as bin/exorcise.R: it is what locates the version,
+# so it cannot itself be shared from R/.
+exorcise_home <- function() {
+  candidates <- character()
+
+  home <- Sys.getenv("EXORCISE_HOME", unset = "")
+  if (nzchar(home)) {
+    candidates <- c(candidates, home)
+  }
+
+  invocation <- grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)
+  if (length(invocation) > 0) {
+    script <- normalizePath(sub("^--file=", "", invocation[[1]]), mustWork = FALSE)
+    here <- dirname(script)
+    candidates <- c(candidates, dirname(here), here)
+  }
+  candidates <- c(candidates, "/exorcise", getwd(), dirname(getwd()))
+
+  for (candidate in candidates) {
+    if (file.exists(file.path(candidate, "R", "version.R"))) {
+      return(normalizePath(candidate))
+    }
+  }
+  stop("Could not find the exorcise installation root, the directory holding ",
+       "R/ and VERSION. Set EXORCISE_HOME to it.", call. = FALSE)
+}
+
+# R/version.R depends on nothing, so sourcing it here does not drag in the
+# Bioconductor stack that the rest of R/ needs.
+local({
+  root <- exorcise_home()
+  source(file.path(root, "R", "version.R"))
+  assign("TRACE_VERSION", read_exorcise_version(root), envir = globalenv())
+})
 
 
 #### Reading ####

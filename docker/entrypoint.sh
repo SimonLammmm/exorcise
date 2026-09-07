@@ -32,6 +32,8 @@ Deprecated, still honoured:
   crispr_pipeline      -> exorcise-analyse
   crispr-screen-viewer database
                        -> exorcise-database
+  crispr-screen-viewer remove DB_DIR EXP_ID...
+                       -> exorcise-database --remove --out-dir DB_DIR EXP_ID...
 
 Run '<command> --help' for the arguments a command accepts.
 EOF
@@ -81,13 +83,35 @@ case "${command}" in
     ;;
   crispr-screen-viewer)
     deprecated "crispr-screen-viewer" exorcise-database
-    # This form took a subcommand; only `database` was ever provided here.
-    if [[ $# -gt 0 && "$1" == "database" ]]; then
-      shift
-    elif [[ $# -gt 0 && "$1" != "-h" && "$1" != "--help" ]]; then
-      echo "         Only the \`database\` subcommand is available. The Dash web viewer and the launch, genes, remove and test subcommands are no longer part of this image." >&2
-    fi
-    exec exorcise-database "$@"
+    # This form took a subcommand. `database` and `remove` are provided; the
+    # rest went with the Dash web viewer.
+    case "${1:-}" in
+      database)
+        shift
+        exec exorcise-database "$@"
+        ;;
+      remove)
+        # The old form was `remove DB_DIR EXP_ID...`, with the database as the
+        # first positional; exorcise-database takes it as --out-dir.
+        shift
+        if [[ $# -eq 0 || "$1" == "-h" || "$1" == "--help" ]]; then
+          exec exorcise-database --remove --help
+        fi
+        db_dir="$1"
+        shift
+        exec exorcise-database --remove --out-dir "${db_dir}" "$@"
+        ;;
+      -h | --help | "")
+        exec exorcise-database --help
+        ;;
+      launch | genes | test)
+        echo "ERROR: the \`$1\` subcommand is no longer part of this image. Only \`database\` and \`remove\` are provided; the Dash web viewer was removed in 3.0.0." >&2
+        exit 1
+        ;;
+      *)
+        exec exorcise-database "$@"
+        ;;
+    esac
     ;;
 
   bash | sh)

@@ -68,7 +68,9 @@ COPY py/ ${EXORCISE_HOME}/py/
 COPY env/ ${EXORCISE_HOME}/env/
 COPY data/ ${EXORCISE_HOME}/data/
 COPY docker/entrypoint.sh ${EXORCISE_HOME}/docker/entrypoint.sh
-COPY README.md CHANGELOG.md LICENSE ${EXORCISE_HOME}/
+# VERSION is not documentation: every entry point reads the project version from
+# it at runtime, and pip reads it at install time.
+COPY VERSION README.md CHANGELOG.md LICENSE ${EXORCISE_HOME}/
 
 RUN chmod +x "${EXORCISE_HOME}"/bin/* "${EXORCISE_HOME}/docker/entrypoint.sh" && \
     "${MAMBA_ROOT}/envs/exorcise-py/bin/pip" install --no-cache-dir "${EXORCISE_HOME}/py"

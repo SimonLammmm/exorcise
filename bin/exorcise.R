@@ -6,9 +6,8 @@
 # Source:  https://github.com/SimonLammmm/exorcise
 # Licence: Creative Commons Zero v1.0 Universal
 #
-# The release history lives in CHANGELOG.md.
-
-EXORCISE_VERSION <- "3.0.1"
+# The release history lives in CHANGELOG.md. The version itself lives in the
+# VERSION file at the root of the installation, and is read below.
 
 # Load order matters. S4Vectors, which arrives with GenomicRanges, exports
 # generics that share names with dplyr verbs (rename among them), so the
@@ -28,42 +27,49 @@ suppressWarnings(suppressMessages({
 options(scipen = 999)
 
 
-# Find the R/ directory belonging to this installation. Earlier versions hard
-# coded /exorcise/bin, which meant the Docker image worked and a plain clone did
-# not. Set EXORCISE_HOME to override.
-exorcise_lib_dir <- function() {
-  home <- Sys.getenv("EXORCISE_HOME", unset = "")
+# Find the root of this installation: the directory holding R/, bin/ and
+# VERSION. Earlier versions hard coded /exorcise, which meant the Docker image
+# worked and a plain clone did not. Set EXORCISE_HOME to override.
+#
+# This is the one piece of bootstrapping each entry point has to carry, because
+# it is what locates everything else, the version included.
+exorcise_home <- function() {
   candidates <- character()
+
+  home <- Sys.getenv("EXORCISE_HOME", unset = "")
   if (nzchar(home)) {
-    candidates <- c(candidates, file.path(home, "R"))
+    candidates <- c(candidates, home)
   }
 
   invocation <- grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)
   if (length(invocation) > 0) {
     script <- normalizePath(sub("^--file=", "", invocation[[1]]), mustWork = FALSE)
     here <- dirname(script)
-    candidates <- c(candidates, file.path(here, "..", "R"), file.path(here, "R"), here)
+    candidates <- c(candidates, dirname(here), here)
   }
-  candidates <- c(candidates, "/exorcise/R", file.path(getwd(), "R"), getwd())
+  candidates <- c(candidates, "/exorcise", getwd(), dirname(getwd()))
 
   for (candidate in candidates) {
-    if (file.exists(file.path(candidate, "common.R"))) {
+    if (file.exists(file.path(candidate, "R", "version.R"))) {
       return(normalizePath(candidate))
     }
   }
-  stop("Could not find the exorcise R/ directory. Set EXORCISE_HOME to the root ",
-       "of your exorcise installation.", call. = FALSE)
+  stop("Could not find the exorcise installation root, the directory holding ",
+       "R/ and VERSION. Set EXORCISE_HOME to it.", call. = FALSE)
 }
 
 EXORCISE_MODULES <- c(
-  "common.R", "options.R", "preprocess.R", "blat.R", "exome.R", "baseedit.R",
-  "output.R", "pipeline.R"
+  "version.R", "common.R", "options.R", "preprocess.R", "blat.R", "exome.R",
+  "baseedit.R", "output.R", "pipeline.R"
 )
 
-EXORCISE_LIB <- exorcise_lib_dir()
+EXORCISE_ROOT <- exorcise_home()
+EXORCISE_LIB <- file.path(EXORCISE_ROOT, "R")
 for (module in EXORCISE_MODULES) {
   source(file.path(EXORCISE_LIB, module))
 }
+
+EXORCISE_VERSION <- read_exorcise_version(EXORCISE_ROOT)
 
 
 exorcise_banner <- function() {

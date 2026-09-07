@@ -6,7 +6,7 @@
 
 # Change this for the exorcise image you are using.
 # See https://hub.docker.com/r/simonlammmm/exorcise/tags
-EXORCISE_IMAGE="simonlammmm/exorcise:3.0.0"
+EXORCISE_IMAGE="simonlammmm/exorcise:3.1.0"
 
 # Or build it from this working tree. Note that the build context is the
 # repository root, so the Dockerfile has to be named explicitly.
@@ -167,6 +167,28 @@ docker run --rm -v .:/data $EXORCISE_IMAGE exorcise-database \
   --counts-dir example/ \
   example/another-experiment.xlsx
 
+#### 6. Remove an experiment from the database ####
+
+# Name it by the workbook you added it with...
+docker run --rm -it -v .:/data $EXORCISE_IMAGE exorcise-database \
+  --remove \
+  --out-dir database-output/ \
+  example/example-crispr-pipeline.xlsx
+
+# ...or by its experiment ID, which you can find in
+# database-output/experiments_metadata.csv.gz.
+docker run --rm -it -v .:/data $EXORCISE_IMAGE exorcise-database \
+  --remove \
+  --out-dir database-output/ \
+  example
+
+# Removal asks before it does anything, so it needs -it as above. In a script,
+# say up front that you mean it. Several experiments can go at once.
+docker run --rm -v .:/data $EXORCISE_IMAGE exorcise-database \
+  --remove --force-overwrite \
+  --out-dir database-output/ \
+  experiment-one experiment-two
+
 #### Deprecated command names ####
 
 # These still work and do exactly the same thing, but print a warning.
@@ -174,3 +196,11 @@ docker run --rm -v .:/data $EXORCISE_IMAGE exorcise-database \
 #   count_reads                   -> exorcise-count
 #   crispr_pipeline               -> exorcise-analyse
 #   crispr-screen-viewer database -> exorcise-database
+#   crispr-screen-viewer remove   -> exorcise-database --remove
+#
+# The old `remove` form took the database directory as its first argument, and
+# that still works:
+docker run --rm -it -v .:/data $EXORCISE_IMAGE crispr-screen-viewer remove \
+  database-output/ example
+# ...which is translated to:
+#   exorcise-database --remove --out-dir database-output/ example
