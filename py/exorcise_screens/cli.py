@@ -297,11 +297,18 @@ def database_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "details_xlsx", nargs="+", metavar="DETAILS_XLSX",
-        help="One or more analysis workbooks.",
+        help="One or more analysis workbooks. With --remove, an experiment ID "
+             "may be given in place of a workbook.",
     )
     parser.add_argument(
         "--out-dir", "-o", metavar="DIRECTORY", required=True,
-        help="Where the database and metadata are written. Required.",
+        help="The database directory: where it is written, or, with --remove, "
+             "the one to remove from. Required.",
+    )
+    parser.add_argument(
+        "--remove", action="store_true",
+        help="Remove the named experiments from the database instead of adding "
+             "them. Takes workbooks or experiment IDs.",
     )
     parser.add_argument(
         "--results-dir", "-r", metavar="DIRECTORY", default="results",
@@ -343,6 +350,7 @@ def run_database(argv: Optional[Sequence[str]] = None) -> int:
         ConfirmationRequired,
         create_database,
         get_paths,
+        remove_experiments_from_db,
         update_database,
     )
     from exorcise_screens.util import set_loguru_level
@@ -358,6 +366,28 @@ def run_database(argv: Optional[Sequence[str]] = None) -> int:
             file=sys.stderr,
         )
     set_loguru_level(logger, levels[verbosity])
+
+    if args.remove:
+        if args.new_db:
+            print(
+                "--remove and --new-db do the opposite of each other. Pick one.",
+                file=sys.stderr,
+            )
+            return 2
+        # Targets may be experiment IDs rather than files, so they are validated
+        # inside remove_experiments_from_db rather than here.
+        try:
+            remove_experiments_from_db(
+                args.out_dir, args.details_xlsx,
+                ask_before_removing=not args.force_overwrite,
+            )
+        except ConfirmationRequired as error:
+            logger.error(str(error))
+            return 1
+        except (FileNotFoundError, RuntimeError) as error:
+            logger.error(str(error).strip("'"))
+            return 2
+        return 0
 
     missing = [fn for fn in args.details_xlsx if not os.path.isfile(fn)]
     if missing:

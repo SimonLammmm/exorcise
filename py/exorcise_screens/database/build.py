@@ -45,7 +45,7 @@ from exorcise_screens.util import (
     maybe_its_gz,
     normalise_text,
 )
-from exorcise_screens.workbook import AnalysisWorkbook
+from exorcise_screens.workbook import AnalysisWorkbook, read_experiment_id
 
 #: Separates a control from a treatment when a comparison is described in prose.
 FAT_ARROW = "➤"
@@ -505,7 +505,8 @@ def remove_experiments(metadata_tables: MetadataTables,
                        session: Session) -> MetadataTables:
     """Drop experiments from the statistics table and the metadata.
 
-    Does not commit; the caller does that.
+    Does not commit; the caller does that. Gene records are left alone: they are
+    shared between experiments and carry no per-experiment data.
     """
     session.execute(
         sqlalchemy.delete(StatTable).where(StatTable.experiment_id.in_(list(exp_ids)))
@@ -518,6 +519,124 @@ def remove_experiments(metadata_tables: MetadataTables,
             ~metadata_tables.experiments["Experiment ID"].isin(exp_ids)
         ],
     )
+
+
+def experiment_ids_from_targets(targets: Sequence[str]) -> List[str]:
+    """Resolve what the user named into experiment IDs.
+
+    Each target is either an analysis workbook, in which case the ID is read from
+    its "Experiment name" field, or an experiment ID given literally. Workbooks
+    are the convenient form, since that is what the experiment was added with;
+    literal IDs are what the old `crispr-screen-viewer remove` took, and what
+    `experiments_metadata.csv.gz` lists.
+    """
+    resolved: List[str] = []
+
+    for target in targets:
+        is_workbook = os.path.isfile(target) and target.lower().endswith(
+            (".xlsx", ".xlsm", ".xltx")
+        )
+        if not is_workbook:
+            if target.lower().endswith((".xlsx", ".xlsm", ".xltx")):
+                raise FileNotFoundError(
+                    f"{target} looks like a workbook but does not exist. To remove "
+                    "an experiment by ID instead, give the ID with no file extension."
+                )
+            logger.debug(f"Treating {target!r} as an experiment ID")
+            resolved.append(target)
+            continue
+
+        try:
+            experiment_id = read_experiment_id(target)
+        except (KeyError, ValueError, OSError) as error:
+            raise RuntimeError(
+                f"Could not read an experiment name out of {target}: {error} "
+                "Give the experiment ID directly instead."
+            ) from None
+
+        logger.info(f"{target} names experiment {experiment_id!r}")
+        resolved.append(experiment_id)
+
+    # Preserve the order given, without duplicates.
+    return list(dict.fromkeys(resolved))
+
+
+def remove_experiments_from_db(db_dir: Union[str, Path],
+                               targets: Sequence[str],
+                               ask_before_removing=True) -> None:
+    """Remove experiments from a database on disk, committing the change.
+
+    Targets are workbooks or experiment IDs; see experiment_ids_from_targets.
+    """
+    db_dir = Path(db_dir)
+    missing = [fn for fn in DB_FILES if not (db_dir / fn).is_file()]
+    if missing:
+        raise FileNotFoundError(
+            f"{db_dir} is not a database directory: missing {', '.join(missing)}."
+        )
+
+    exp_ids = experiment_ids_from_targets(targets)
+    metadata = MetadataTables.from_files(db_dir)
+    present = set(metadata.experiments["Experiment ID"].unique())
+
+    absent = [x for x in exp_ids if x not in present]
+    if absent:
+        logger.warning(
+            f"Not in the database, so nothing to remove: {', '.join(absent)}. "
+            f"The database holds: {', '.join(sorted(present)) or 'nothing'}"
+        )
+
+    to_remove = [x for x in exp_ids if x in present]
+    if not to_remove:
+        logger.error("None of the experiments named are in the database.")
+        return
+
+    comparisons = metadata.comparisons
+    affected = int(comparisons["Experiment ID"].isin(to_remove).sum())
+
+    if ask_before_removing:
+        confirm_removal(db_dir, to_remove, affected)
+
+    engine = create_engine(get_db_url(db_dir))
+    with Session(engine) as session:
+        modified = remove_experiments(metadata, to_remove, session)
+        session.commit()
+    modified.to_files(db_dir)
+
+    logger.info(
+        f"Removed {len(to_remove)} experiment(s) and {affected} comparison(s) "
+        f"from {db_dir}: {', '.join(to_remove)}"
+    )
+    logger.info(
+        f"{len(modified.experiments)} experiment(s) remain."
+    )
+
+
+def confirm_removal(db_dir: Path, exp_ids: Sequence[str], comparisons: int) -> None:
+    """Get consent before removing experiments. Same rules as confirm_deletion."""
+    print(
+        f"These {len(exp_ids)} experiment(s) and their {comparisons} comparison(s) "
+        f"will be removed from {db_dir}:",
+        file=sys.stderr,
+    )
+    for exp_id in exp_ids:
+        print(f"    {exp_id}", file=sys.stderr)
+
+    if not sys.stdin.isatty():
+        raise ConfirmationRequired(
+            "Refusing to remove experiments without confirmation, and stdin is "
+            "not a terminal so you cannot be asked. Re-run with "
+            "--force-overwrite to remove them, or allocate a terminal "
+            "(`docker run -it ...`) to be prompted."
+        )
+
+    try:
+        input("Press enter to continue, Ctrl+C to cancel. ")
+    except (EOFError, KeyboardInterrupt):
+        print(file=sys.stderr)
+        raise ConfirmationRequired(
+            "Cancelled; the database was left alone."
+        ) from None
 
 
 def confirm_deletion(existing: List[str]) -> None:
@@ -619,18 +738,3 @@ def update_database(db_dir: Union[str, Path], analysis_infos: List[AnalysisInfo]
     logger.info(f"Updated the database in {db_dir}")
 
 
-def remove_experiments_from_db(db_dir: Union[str, Path],
-                               experiments_to_remove: Sequence[str]) -> None:
-    """Remove experiments from a database on disk, committing the change."""
-    db_dir = Path(db_dir)
-    metadata = MetadataTables.from_files(db_dir)
-    engine = create_engine(get_db_url(db_dir))
-
-    with Session(engine) as session:
-        modified = remove_experiments(metadata, experiments_to_remove, session)
-        session.commit()
-
-    modified.to_files(db_dir)
-    logger.info(
-        f"Removed {len(experiments_to_remove)} experiment(s) from {db_dir}"
-    )

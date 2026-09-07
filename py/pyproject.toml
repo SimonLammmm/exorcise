@@ -4,7 +4,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "exorcise-screens"
-version = "3.0.0"
+# Derived from the VERSION file at the repository root, by way of
+# exorcise_screens.__version__, so that there is one version to maintain.
+dynamic = ["version"]
 description = "CRISPR screen read counting, analysis and database building, alongside Exorcise"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -43,6 +45,12 @@ count_reads = "exorcise_screens.cli:deprecated_count_reads"
 crispr_pipeline = "exorcise_screens.cli:deprecated_crispr_pipeline"
 "crispr_pipeline.py" = "exorcise_screens.cli:deprecated_crispr_pipeline"
 crispr-screen-viewer = "exorcise_screens.cli:deprecated_crispr_screen_viewer"
+
+[tool.setuptools.dynamic]
+# `attr` rather than `file` because the VERSION file sits above this directory,
+# and setuptools will not read a `file` outside the project. Importing the
+# attribute is safe: exorcise_screens/__init__.py imports nothing third-party.
+version = { attr = "exorcise_screens.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["."]

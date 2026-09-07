@@ -11,7 +11,7 @@ and the Docker entrypoint cannot drift apart.
 from __future__ import annotations
 
 import sys
-from typing import Dict, NamedTuple, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, NamedTuple, Optional, Sequence, Tuple
 
 
 class Deprecated(NamedTuple):
@@ -21,7 +21,30 @@ class Deprecated(NamedTuple):
     #: Leading arguments the old form required which the new one does not take,
     #: e.g. `crispr-screen-viewer database` becomes `exorcise-database`.
     drop_leading: Tuple[str, ...] = ()
+    #: Subcommands whose arguments need rearranging, not just stripping. Maps a
+    #: subcommand to a function taking its arguments and returning the current
+    #: equivalent.
+    translate: Optional[Dict[str, Callable[[List[str]], List[str]]]] = None
     note: Optional[str] = None
+
+
+def _translate_remove(args: List[str]) -> List[str]:
+    """`remove DB_DIR EXP_ID...` becomes `--remove --out-dir DB_DIR EXP_ID...`.
+
+    The old form took the database directory as its first positional argument;
+    exorcise-database takes it as --out-dir.
+    """
+    if not args or args[0] in ("-h", "--help"):
+        return ["--remove", "--help"]
+
+    db_dir, targets = args[0], args[1:]
+    if not targets:
+        print(
+            "WARNING: `crispr-screen-viewer remove` needs a database directory "
+            "and then at least one experiment to remove.",
+            file=sys.stderr,
+        )
+    return ["--remove", "--out-dir", db_dir, *targets]
 
 
 # Keyed by the name the user typed.
@@ -35,9 +58,11 @@ DEPRECATED_COMMANDS: Dict[str, Deprecated] = {
     "crispr-screen-viewer": Deprecated(
         "exorcise-database",
         drop_leading=("database",),
+        translate={"remove": _translate_remove},
         note=(
-            "Only the `database` subcommand is provided. The Dash web viewer, "
-            "and the `launch`, `genes`, `remove` and `test` subcommands, are no "
+            "The `database` and `remove` subcommands are provided, as "
+            "`exorcise-database` and `exorcise-database --remove`. The Dash web "
+            "viewer, and the `launch`, `genes` and `test` subcommands, are no "
             "longer part of this package."
         ),
     ),
@@ -84,6 +109,11 @@ def resolve_invocation(invoked_as: str,
 
     warn_deprecated_name(invoked_as)
     args = list(args)
+
+    # Subcommands whose arguments need rearranging rather than just stripping.
+    if entry.translate and args and args[0] in entry.translate:
+        subcommand = args.pop(0)
+        return entry.replacement, entry.translate[subcommand](args)
 
     # `crispr-screen-viewer database ...` carried a subcommand that
     # `exorcise-database ...` does not.
