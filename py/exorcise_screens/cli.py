@@ -296,9 +296,9 @@ def database_parser() -> argparse.ArgumentParser:
                     "workbooks and the tables exorcise-analyse produced.",
     )
     parser.add_argument(
-        "details_xlsx", nargs="+", metavar="DETAILS_XLSX",
+        "details_xlsx", nargs="*", metavar="DETAILS_XLSX",
         help="One or more analysis workbooks. With --remove, an experiment ID "
-             "may be given in place of a workbook.",
+             "may be given in place of a workbook. Not needed with --reindex.",
     )
     parser.add_argument(
         "--out-dir", "-o", metavar="DIRECTORY", required=True,
@@ -309,6 +309,11 @@ def database_parser() -> argparse.ArgumentParser:
         "--remove", action="store_true",
         help="Remove the named experiments from the database instead of adding "
              "them. Takes workbooks or experiment IDs.",
+    )
+    parser.add_argument(
+        "--reindex", action="store_true",
+        help="Create any missing indexes on an existing database and exit. "
+             "Changes no data. Needs only --out-dir.",
     )
     parser.add_argument(
         "--results-dir", "-r", metavar="DIRECTORY", default="results",
@@ -350,6 +355,7 @@ def run_database(argv: Optional[Sequence[str]] = None) -> int:
         ConfirmationRequired,
         create_database,
         get_paths,
+        reindex_database,
         remove_experiments_from_db,
         update_database,
     )
@@ -366,6 +372,36 @@ def run_database(argv: Optional[Sequence[str]] = None) -> int:
             file=sys.stderr,
         )
     set_loguru_level(logger, levels[verbosity])
+
+    if args.reindex:
+        for conflicting in ("remove", "new_db"):
+            if getattr(args, conflicting):
+                print(
+                    f"--reindex only fixes indexes, so it cannot be combined "
+                    f"with --{conflicting.replace('_', '-')}.",
+                    file=sys.stderr,
+                )
+                return 2
+        if args.details_xlsx:
+            print(
+                "--reindex takes no workbooks; it acts on the database at "
+                "--out-dir. Ignoring: " + ", ".join(args.details_xlsx),
+                file=sys.stderr,
+            )
+        try:
+            reindex_database(args.out_dir)
+        except FileNotFoundError as error:
+            logger.error(str(error).strip("'"))
+            return 2
+        return 0
+
+    if not args.details_xlsx:
+        print(
+            "At least one workbook is required. Use --reindex if you meant to "
+            "index an existing database without adding to it.",
+            file=sys.stderr,
+        )
+        return 2
 
     if args.remove:
         if args.new_db:

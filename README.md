@@ -399,6 +399,7 @@ exorcise-database --out-dir db/ --results-dir results/ --counts-dir counts/ \
 | `--filename-prefix` (`-p`)| No      | Prefix the analysis files were written with. Default `result`.        |
 | `--new-db` (`-n`)        | No       | Create a new database rather than adding to one.                     |
 | `--remove`               | No       | Remove the named experiments instead of adding them.                  |
+| `--reindex`              | No       | Add any missing index to an existing database and exit.               |
 | `--update-existing` (`-u`)| No      | Replace experiments already present instead of skipping them.         |
 | `--force-overwrite` (`-f`)| No      | Skip the confirmation prompt for a destructive action.                |
 | `--verbosity` (`-v`)     | No       | 0 warnings, 1 info, 2 debug. Default 1.                              |
@@ -433,6 +434,35 @@ errors.
 
 Like `--new-db`, removal asks first, needs `-it` under `docker run` to be
 answerable, and takes `--force-overwrite` to proceed unattended.
+
+### Indexing
+
+A finished database is indexed for the queries downstream tools make. The `stat`
+table's primary key is ordered `(comparison_id, gene_id, analysis_type_id)`, so
+it only helps queries that filter on comparison first; anything asking about one
+gene across many comparisons would otherwise scan the whole table. Two indexes
+are added once the rows are written:
+
+| Index                 | Columns                           | Serves                          |
+|-----------------------|-----------------------------------|---------------------------------|
+| `crave_idx_stat_gene` | `gene_id, analysis_type_id`       | one gene across comparisons     |
+| `crave_idx_stat_type` | `analysis_type_id, comparison_id` | a whole analysis type           |
+
+This happens automatically whenever a database is created, added to or updated,
+so normally there is nothing to do. For a database built before this was added:
+
+```bash
+exorcise-database --reindex --out-dir db/
+```
+
+which creates whatever is missing, runs `ANALYZE`, and changes no data. It is
+idempotent, so it is safe to run on a database that is already indexed.
+
+The index names are [CRAVE](https://github.com/simonlammmm/crave)'s. CRAVE
+creates these itself if they are absent, looking for exactly these names, so
+matching them means it finds them already there instead of spending minutes
+rebuilding them at startup — and it cannot build them at all when the dataset
+directory is mounted read-only, as it usually is in a deployment.
 
 ## Repository layout
 

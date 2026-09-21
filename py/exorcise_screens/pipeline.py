@@ -258,7 +258,9 @@ def call_chronos_batch(sample_reps: Dict[str, list], days_grown: Dict[str, list]
     )
 
     guidemap = pd.DataFrame({"sgrna": counts[guide_column], "gene": counts[gene_column]})
-    negative_controls = _chronos_negative_controls(counts[guide_column])
+    negative_controls = _chronos_negative_controls(
+        counts[guide_column], counts[gene_column]
+    )
     sequence_map = _chronos_sequence_map(sample_reps, days_grown, cell_line_hash)
 
     for control_sample, treat_samples in control_map.items():
@@ -298,12 +300,48 @@ def call_chronos_batch(sample_reps: Dict[str, list], days_grown: Dict[str, list]
         )
 
 
-def _chronos_negative_controls(guides: pd.Series) -> pd.Series:
-    """Prefer the library designer's controls; fall back to Exorcise's labels."""
-    designed = guides[guides.str.match(CHRONOS_DESIGN_CONTROLS)]
-    if len(designed):
-        return designed
-    return guides[guides.str.match(CHRONOS_FALLBACK_CONTROLS)]
+def _chronos_negative_controls(guides: pd.Series, genes: pd.Series) -> pd.Series:
+    """The sgRNA IDs of guides that do not target anything.
+
+    Chronos uses these to estimate how much of the variance in a screen is noise
+    rather than biology. Without them it falls back to a flat default, which is a
+    worse model, so it is worth looking properly.
+
+    Which column names a control depends on the library. Exorcise writes the
+    symbol into the guide ID, so `exo_id` carries it; libraries that were counted
+    against their own design usually have opaque guide IDs like "ID_1" and name
+    the control in the gene column instead. Both are searched, because only
+    looking at the guide ID silently found nothing for the latter.
+
+    The designer's own controls are preferred over Exorcise's `exo_Non-targeting`
+    labels: the latter mean "this guide failed to map", which is not the same
+    claim as "this guide was built not to target anything".
+    """
+    guides = guides.astype(str)
+    genes = genes.astype(str)
+
+    for pattern, description in (
+        (CHRONOS_DESIGN_CONTROLS, "the library design"),
+        (CHRONOS_FALLBACK_CONTROLS, "Exorcise's unmapped-guide labels"),
+    ):
+        selected = guides[
+            guides.str.match(pattern) | genes.str.match(pattern)
+        ]
+        if len(selected):
+            logger.info(
+                f"Chronos is using {len(selected)} negative control guide(s) "
+                f"identified from {description}."
+            )
+            return selected
+
+    logger.warning(
+        "No negative control guides were found, so Chronos cannot estimate "
+        "excess variance and will fall back to its default. Controls are "
+        "recognised by matching /"
+        + CHRONOS_FALLBACK_CONTROLS
+        + "/ against either the guide or the gene column of the counts file."
+    )
+    return guides.iloc[:0]
 
 
 def _unstack_to_frame(mapping: Dict[str, list], value_name: str) -> pd.DataFrame:
@@ -338,6 +376,50 @@ def _chronos_sequence_map(sample_reps, days_grown, cell_line_hash) -> pd.DataFra
     return sequence_map
 
 
+#: What Chronos itself uses for excess variance when it has no negative controls
+#: to estimate it from. Supplying it explicitly is a workaround: some versions
+#: leave it as an empty dict on this path and then reject their own value with
+#: "excess_variance was passed as dict without key for 'default'".
+CHRONOS_DEFAULT_EXCESS_VARIANCE = 0.02
+
+
+def _fit_chronos_without_controls(chronos, common, initial_screen_delay,
+                                  control_sample):
+    """Fit a model for a screen with no usable negative controls.
+
+    Returns None if it cannot be fitted, having said why.
+    """
+    attempts = (
+        ("supplying the default excess variance",
+         dict(excess_variance=CHRONOS_DEFAULT_EXCESS_VARIANCE,
+              initial_screen_delay=initial_screen_delay)),
+        ("letting Chronos estimate excess variance",
+         dict(initial_screen_delay=initial_screen_delay)),
+        ("with default settings", {}),
+    )
+
+    failures = []
+    for description, extra in attempts:
+        try:
+            return chronos.Chronos(**common, **extra)
+        except TypeError as error:
+            # An argument this version of Chronos does not accept. Worth trying
+            # the next, simpler, form.
+            failures.append(f"{description}: {error}")
+        except Exception as error:
+            failures.append(f"{description}: {error}")
+
+    logger.warning(
+        f"Chronos could not fit {control_sample} without negative controls, so "
+        f"this comparison has no Chronos result. Attempts:\n    "
+        + "\n    ".join(failures)
+        + "\n  Negative controls are what Chronos estimates excess variance "
+        "from; check that the counts file labels them in either its guide or "
+        "its gene column."
+    )
+    return None
+
+
 def _fit_chronos(group_map, readcounts, guidemap, negative_controls, group_prefix,
                  initial_screen_delay, control_sample) -> None:
     """Train and save one Chronos model.
@@ -365,24 +447,27 @@ def _fit_chronos(group_map, readcounts, guidemap, negative_controls, group_prefi
         sequence_map={"default": group_map},
         guide_gene_map={"default": guidemap},
     )
-    try:
-        model = chronos.Chronos(
-            negative_control_sgrnas={"default": negative_controls},
-            initial_screen_delay=initial_screen_delay,
-            **common,
-        )
-    except Exception as first_error:
-        logger.info(
-            f"Chronos rejected the negative controls for {control_sample} "
-            f"({first_error}); retrying without them."
-        )
+
+    model = None
+    if len(negative_controls):
         try:
-            model = chronos.Chronos(**common)
-        except Exception as second_error:
-            logger.warning(
-                f"Chronos failed for {control_sample}: {second_error}. Skipping."
+            model = chronos.Chronos(
+                negative_control_sgrnas={"default": negative_controls},
+                initial_screen_delay=initial_screen_delay,
+                **common,
             )
-            return
+        except Exception as error:
+            logger.warning(
+                f"Chronos rejected the negative controls for {control_sample} "
+                f"({error}); retrying without them."
+            )
+
+    if model is None:
+        model = _fit_chronos_without_controls(
+            chronos, common, initial_screen_delay, control_sample
+        )
+    if model is None:
+        return
 
     model.train()
     os.makedirs(group_prefix, exist_ok=True)

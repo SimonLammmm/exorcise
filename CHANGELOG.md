@@ -1,5 +1,83 @@
 # Changelog
 
+## 3.1.1
+
+### Added
+
+- The database is now indexed for the queries downstream tools actually make.
+  `stat`'s primary key is ordered `(comparison_id, gene_id, analysis_type_id)`,
+  so anything that asks about one gene across many comparisons could not use it
+  and scanned the whole table. Two indexes are created once the rows are in:
+
+  | Index                 | Columns                          |
+  |-----------------------|----------------------------------|
+  | `crave_idx_stat_gene` | `gene_id, analysis_type_id`      |
+  | `crave_idx_stat_type` | `analysis_type_id, comparison_id`|
+
+  On CRAVE's own example database this turns a gene lookup from `SCAN stat`
+  into `SEARCH stat USING INDEX crave_idx_stat_gene`.
+
+  The names are CRAVE's, matched deliberately. CRAVE builds these itself when
+  they are absent, identifying them by exactly these names, so a database
+  indexed here means it finds them present and skips a build that takes minutes
+  on a large dataset. It also cannot build them at all when the dataset
+  directory is mounted read-only, which is the usual way to deploy it, so for
+  those deployments indexing here is the only way the queries are ever fast.
+
+  Indexes are built after the statistics are written rather than declared on the
+  table. Declared, SQLAlchemy would create them before any rows existed and
+  every insert would pay to maintain them; built afterwards it is one sort.
+
+- `exorcise-database --reindex --out-dir DIR` adds any missing index to an
+  existing database and changes nothing else, for databases built before this
+  release. Adding to or updating a database does the same thing on the way
+  through, so a database also gets fixed simply by being used. Both are
+  idempotent and report what they found.
+
+  `ANALYZE` is run after creating indexes, without which SQLite's planner may
+  not know they are worth using.
+
+- Which indexes are required is declared in one place, `REQUIRED_INDEXES` in
+  `database/schema.py`. Adding one there is enough; the check, the creation and
+  the reporting all read from it.
+
+### Fixed
+
+- Chronos found no negative controls in any library that names them in the gene
+  column rather than the guide column, which is most libraries counted against
+  their own design. It only ever searched the guide column, so a library with
+  guide IDs like `ID_1` and genes like `Non-targeting1` yielded nothing, and
+  every Chronos run fell back to its no-negative-controls path. Both columns are
+  now searched.
+
+  This is longstanding, inherited from crispr_tools, not new in 3.x. On
+  Almu_NVS097 it is the difference between 0 and 1000 negative controls.
+
+  Note that Chronos scores produced with negative controls are **not directly
+  comparable** with scores produced without them: excess variance is now
+  estimated from the controls rather than left at Chronos's flat default of
+  0.02. Earlier Chronos output should be regenerated rather than mixed with new
+  output.
+
+- The no-negative-controls path failed outright with "excess_variance was passed
+  as dict without key for 'default'" on current Chronos, so a screen genuinely
+  without controls got no Chronos result at all. This worked under exorcise 1.6
+  and broke without any change on our side, because `crispr_chronos` is the one
+  unpinned dependency. The fallback now tries supplying the default excess
+  variance explicitly, then the previous forms, and reports every attempt if all
+  fail rather than a single opaque message.
+
+- An empty set of negative controls is no longer handed to Chronos only for it
+  to reject it. Roughly fifteen seconds per comparison was spent building a model
+  that could not be fitted, and it logged as though the controls were faulty
+  rather than absent.
+
+### Changed
+
+- `env/exorcise-py.yaml` documents why `crispr_chronos` being unpinned is a
+  hazard, and how to pin it. It is still unpinned: the working version could not
+  be determined from the files here.
+
 ## 3.1.0
 
 ### Added
