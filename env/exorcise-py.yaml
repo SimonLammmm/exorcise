@@ -30,4 +30,20 @@ dependencies:
   - pip=24.2
   - pip:
       - attrdictionary
+      # WARNING: unpinned, and it has already bitten us. Every other dependency
+      # in this file is pinned, so two builds of the same exorcise version get
+      # the same software; crispr_chronos does not, so an image built today can
+      # behave differently from one built last month.
+      #
+      # It did: a Chronos released between exorcise 1.6 and 3.1.0 broke the
+      # path taken when a screen has no negative controls, failing with
+      # "excess_variance was passed as dict without key for 'default'". See
+      # CHRONOS_DEFAULT_EXCESS_VARIANCE in py/exorcise_screens/pipeline.py for
+      # the workaround.
+      #
+      # To pin it, read the version out of an image that is known to work and
+      # put it here:
+      #   docker run --rm simonlammmm/exorcise:1.6_arm64 bash -lc \
+      #     '/opt/miniforge3/envs/crispr_tools/bin/pip show crispr_chronos'
+      # then change this line to, for example, crispr_chronos==<that version>.
       - crispr_chronos

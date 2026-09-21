@@ -102,3 +102,33 @@ class StatTable(TableBase):
     fdr10: MFloatN
     pos_p: MFloatN
     neg_p: MFloatN
+
+
+#: Indexes a finished database needs, beyond the implicit one SQLite builds for
+#: the primary key.
+#:
+#: That implicit index is ordered (comparison_id, gene_id, analysis_type_id), so
+#: it only serves queries that filter on comparison_id first. Anything that asks
+#: about one gene across many comparisons cannot use it and falls back to a full
+#: scan of the whole stat table.
+#:
+#: The names are CRAVE's, deliberately. CRAVE builds these itself if they are
+#: absent, by looking for these exact names in sqlite_master, so matching them
+#: means it finds them already there and skips a build that takes minutes on a
+#: large dataset. More importantly, CRAVE cannot build them at all when the
+#: dataset directory is mounted read-only, which is the normal way to deploy it;
+#: in that case a database indexed here is the only way those queries are ever
+#: fast.
+#:
+#: These are not declared on the table above on purpose. SQLAlchemy would then
+#: create them with the table, before any rows exist, and every insert would pay
+#: to maintain them. Building them once, after the data is in, is a sort rather
+#: than several million B-tree insertions.
+REQUIRED_INDEXES = {
+    # Correlate and Pendragonator: one gene, every comparison. gene_id leads so
+    # that this also serves queries filtering on gene alone.
+    "crave_idx_stat_gene": ("stat", ("gene_id", "analysis_type_id")),
+    # Selecting a whole analysis type, which Explore does when populating its
+    # comparison list.
+    "crave_idx_stat_type": ("stat", ("analysis_type_id", "comparison_id")),
+}

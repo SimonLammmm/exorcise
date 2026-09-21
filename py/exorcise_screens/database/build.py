@@ -35,7 +35,12 @@ from exorcise_screens.database.metadata import (
     MetadataTables,
     get_db_url,
 )
-from exorcise_screens.database.schema import GeneTable, StatTable, TableBase
+from exorcise_screens.database.schema import (
+    REQUIRED_INDEXES,
+    GeneTable,
+    StatTable,
+    TableBase,
+)
 from exorcise_screens.util import (
     TIMEPOINT_LABELS,
     df_rename_columns,
@@ -440,6 +445,102 @@ def create_engine_with_schema(destination="sqlite://", echo=False) -> Engine:
     return engine
 
 
+def existing_index_names(engine: Engine) -> set:
+    """Every index present in the database, by name."""
+    with engine.begin() as connection:
+        rows = connection.execute(
+            sqlalchemy.text("SELECT name FROM sqlite_master WHERE type = 'index'")
+        )
+        return {row[0] for row in rows}
+
+
+def missing_indexes(engine: Engine) -> Dict[str, tuple]:
+    """The entries of REQUIRED_INDEXES this database does not have."""
+    present = existing_index_names(engine)
+    return {
+        name: spec
+        for name, spec in REQUIRED_INDEXES.items()
+        if name not in present
+    }
+
+
+def ensure_indexes(engine: Engine, analyse=True) -> List[str]:
+    """Create whichever of REQUIRED_INDEXES the database is missing.
+
+    Returns the names created, empty if it was already up to date. Safe to call
+    on any database, including one built by an earlier version of exorcise,
+    which is the point: adding to a database is also how it gets indexed.
+
+    Run after the rows are in. Building an index over a populated table is one
+    sort; having it exist beforehand makes every insert maintain it.
+    """
+    outstanding = missing_indexes(engine)
+    if not outstanding:
+        logger.info("Every index the database needs is already present.")
+        return []
+
+    logger.info(
+        f"Creating {len(outstanding)} missing index(es): "
+        f"{', '.join(outstanding)}. This sorts the whole table and can take "
+        "several minutes on a large database. It happens once."
+    )
+
+    created: List[str] = []
+    with engine.begin() as connection:
+        for name, (table, columns) in outstanding.items():
+            statement = (
+                f"CREATE INDEX IF NOT EXISTS {name} "
+                f"ON {table} ({', '.join(columns)})"
+            )
+            logger.debug(statement)
+            connection.execute(sqlalchemy.text(statement))
+            logger.info(f"  created {name} on {table} ({', '.join(columns)})")
+            created.append(name)
+
+    if analyse:
+        # Without statistics SQLite's planner may not realise the new indexes
+        # are worth using, in which case creating them changes nothing.
+        logger.info("Collecting statistics (ANALYZE)...")
+        with engine.begin() as connection:
+            connection.execute(sqlalchemy.text("ANALYZE"))
+
+    return created
+
+
+def describe_indexes(engine: Engine) -> Dict[str, List[str]]:
+    """Every index in the database, grouped by table, for reporting."""
+    with engine.begin() as connection:
+        rows = connection.execute(sqlalchemy.text(
+            "SELECT tbl_name, name FROM sqlite_master WHERE type = 'index' "
+            "ORDER BY tbl_name, name"
+        ))
+        grouped: Dict[str, List[str]] = {}
+        for table, name in rows:
+            grouped.setdefault(table, []).append(name)
+    return grouped
+
+
+def reindex_database(db_dir: Union[str, Path]) -> None:
+    """Bring an existing database's indexes up to date, changing nothing else."""
+    db_dir = Path(db_dir)
+    missing = [fn for fn in DB_FILES if not (db_dir / fn).is_file()]
+    if missing:
+        raise FileNotFoundError(
+            f"{db_dir} is not a database directory: missing {', '.join(missing)}."
+        )
+
+    engine = create_engine(get_db_url(db_dir))
+    created = ensure_indexes(engine)
+
+    if created:
+        logger.info(f"Indexed {db_dir}.")
+    else:
+        logger.info(f"{db_dir} already has every index it needs; nothing to do.")
+
+    for table, indexes in describe_indexes(engine).items():
+        logger.info(f"  {table}: {', '.join(indexes) if indexes else 'no indexes'}")
+
+
 def insert_records(table: Type[TableBase], records: List[dict],
                    session: Session) -> None:
     """Insert rows, dropping null values so that column defaults apply.
@@ -498,6 +599,11 @@ def write_db_files(outdir: Union[str, Path], analysis_infos: List[AnalysisInfo],
     session.commit()
     logger.info("Writing metadata tables")
     metadata.to_files(outdir)
+
+    # After the rows, not before: see ensure_indexes. Downstream tools, CRAVE
+    # among them, expect a finished database to be indexed, and cannot index it
+    # themselves if it is deployed read-only.
+    ensure_indexes(session.get_bind())
 
 
 def remove_experiments(metadata_tables: MetadataTables,
