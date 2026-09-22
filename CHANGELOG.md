@@ -1,5 +1,38 @@
 # Changelog
 
+## 3.1.2
+
+### Fixed
+
+- The image was unusable under Singularity, and under `docker run --user`:
+
+  ```
+  $ singularity run exorcise_3.1.1_amd64.sif
+  bash: /exorcise/docker/entrypoint.sh: Permission denied
+  ```
+
+  `COPY` preserves the modes of the build context. A checkout on macOS is
+  commonly `600`/`700`, and `chmod +x` with the default umask turns `700` into
+  `711` — executable by anyone, readable only by root. Docker never showed this
+  because the container runs as root. Singularity runs as the invoking user, and
+  a shell script has to be *read* by its interpreter, not merely executed, so it
+  fails immediately.
+
+  It was not only the entrypoint: `R/*.R` were `600` and `data/*.gz` were `700`,
+  so nothing under `/exorcise` was readable by an unprivileged user. `exorcise`
+  itself would have failed to source its own modules even with the entrypoint
+  bypassed.
+
+  The image now runs `chmod -R a+rX` over `${EXORCISE_HOME}` and sets the
+  scripts to `0755`, and a build step asserts that a representative file of each
+  kind is world-readable, so a future build fails rather than shipping an image
+  only root can use.
+
+  This needs a version bump and a rebuild: `exorcise_3.1.1_amd64.sif` as already
+  distributed still has the problem. Until then, `singularity exec` with the
+  console script bypasses the entrypoint and works, which is what
+  `scripts/exorcise-analyse.sbatch` does.
+
 ## 3.1.1
 
 ### Added

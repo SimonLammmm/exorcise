@@ -72,8 +72,35 @@ COPY docker/entrypoint.sh ${EXORCISE_HOME}/docker/entrypoint.sh
 # it at runtime, and pip reads it at install time.
 COPY VERSION README.md CHANGELOG.md LICENSE ${EXORCISE_HOME}/
 
-RUN chmod +x "${EXORCISE_HOME}"/bin/* "${EXORCISE_HOME}/docker/entrypoint.sh" && \
-    "${MAMBA_ROOT}/envs/exorcise-py/bin/pip" install --no-cache-dir "${EXORCISE_HOME}/py"
+# Normalise permissions. COPY preserves the modes of the build context, and a
+# checkout on macOS is commonly 600/700, so without this the image is readable
+# only by root. Docker hides that because the container runs as root;
+# Singularity and `docker run --user` do not, and a 711 shell script fails with
+# "Permission denied" because the interpreter has to read it, not just execute
+# it.
+#
+# a+rX gives everyone read, and execute only where execute was already set,
+# which is what directories need and plain files do not.
+RUN chmod -R a+rX "${EXORCISE_HOME}" && \
+    chmod 0755 "${EXORCISE_HOME}"/bin/* "${EXORCISE_HOME}/docker/entrypoint.sh" && \
+    "${MAMBA_ROOT}/envs/exorcise-py/bin/pip" install --no-cache-dir "${EXORCISE_HOME}/py" && \
+    find "${MAMBA_ROOT}/envs/exorcise-py/lib" -name 'exorcise_screens*' -maxdepth 4 \
+        -exec chmod -R a+rX {} + && \
+    chmod 0755 "${MAMBA_ROOT}/envs/exorcise-py/bin/exorcise-"*
+
+# Fail the build rather than ship an image that only root can use. Every one of
+# these is something Singularity needs to read as an unprivileged user.
+RUN set -e; \
+    for f in "${EXORCISE_HOME}/docker/entrypoint.sh" \
+             "${EXORCISE_HOME}/bin/exorcise" \
+             "${EXORCISE_HOME}/bin/exorcise.R" \
+             "${EXORCISE_HOME}/R/common.R" \
+             "${EXORCISE_HOME}/VERSION" \
+             "${EXORCISE_HOME}/data/hsa.grch38.refseqall.tsv.gz"; do \
+      perms=$(stat -c '%a' "$f"); \
+      case "$perms" in *[4567]) ;; *) echo "NOT WORLD-READABLE: $f ($perms)" >&2; exit 1 ;; esac; \
+    done; \
+    echo "permission check passed"
 
 ENTRYPOINT ["/exorcise/docker/entrypoint.sh"]
 
