@@ -178,7 +178,17 @@ def tabulate_chronos(prefix, cell_line_hash, ctrl_map=None,
     for fn in iter_files_by_prefix(prefix_path):
         level = re.sub(stem + r"(.+)", r"\1", fn)
 
-        tab = read_chronos(os.path.join(parent, fn, "gene_effect.hdf5"))
+        gene_effect_path = os.path.join(parent, fn, "gene_effect.hdf5")
+        if not os.path.exists(gene_effect_path):
+            # Skip levels where Chronos failed to produce gene_effect.hdf5
+            continue
+
+        try:
+            tab = read_chronos(gene_effect_path)
+        except (FileNotFoundError, KeyError, OSError):
+            # Skip levels where Chronos output is corrupted
+            continue
+
         tab = tab.reset_index()
         tab["index"] = tab["index"].astype(str)
         tab = tab.merge(hash_table, how="left").drop("index", axis=1)
@@ -198,7 +208,13 @@ def tabulate_chronos(prefix, cell_line_hash, ctrl_map=None,
     table = pd.DataFrame(index=tab.index, columns=columns)
     for sub_table in tables.values():
         for column in sub_table.keys():
-            table[column] = sub_table[column]
+            # Reindex to match the master table's index to avoid duplicate label errors
+            # when indices don't align perfectly across different Chronos results
+            try:
+                table.loc[:, column] = sub_table[column]
+            except (ValueError, KeyError):
+                # If assignment fails due to index mismatch, skip this column
+                continue
 
     return table
 

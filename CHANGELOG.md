@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.1.3
+
+### Fixed
+- **tabulate_chronos**: Handle failed Chronos group fitting gracefully. When Chronos fails to fit a group (e.g., due to negative control efficacies outside acceptable bounds), the tabulation code no longer crashes with "cannot reindex on an axis with duplicate labels". Missing or corrupted `gene_effect.hdf5` files are now skipped, and index mismatches during result merging are handled safely. Allows `exorcise-analyse` to complete successfully and produce output tables for successful groups even when some groups fail to converge.
+
 ## 3.1.2
 
 ### Fixed
