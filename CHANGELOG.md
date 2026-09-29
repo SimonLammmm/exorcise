@@ -47,10 +47,10 @@
   with a plain `str.replace`, which would eat a hyphen inside a name. Neither
   happens for a supplied method: its table is matched by exact string and never
   rewritten. The check now applies to the samples a computed analysis could
-  actually name, so `Valentina_FGC0026` — 324 of whose samples contain a
-  hyphen, in labels like `..._1-24h_DDR` — no longer has to be renamed to
-  satisfy a rule that does not apply to it. All 262 workbooks in `internal` and
-  `external` give the same accept/reject outcome as they did in 3.1.3.
+  actually name. A manual-only workbook whose sample labels embed a range, in
+  the style of `..._1-24h_DDR`, no longer has to be renamed to satisfy a rule
+  that does not apply to it. Every workbook in a 262-workbook test collection
+  gives the same accept/reject outcome as it did in 3.1.3.
 
 - **An unknown method name passed validation whenever `--counts` named a
   file.** The check sat inside the branch of `_check_counts_files` taken only
@@ -58,9 +58,9 @@
   some/file.tsv` skipped it. It is now `_check_methods`, called unconditionally.
 
 - **Chronos crashed with `AttributeError: 'int' object has no attribute
-  'encode'` on libraries whose guides are numbered rather than named.**
-  For example, when a counts file
-  identifies guides as `1, 2, 3, ...`. Pandas types a column of bare numbers as
+  'encode'` on libraries whose guides are numbered rather than named**, that
+  is, whose counts file identifies guides as `1, 2, 3, ...` rather than by a
+  textual ID. Pandas types a column of bare numbers as
   `int64`, so the readcounts frame handed to Chronos had integer column labels,
   and `chronos.model.write_hdf5` calls `.encode("utf8")` on them. The model had
   already been fitted by that point, so the whole fit was lost at the save step.
@@ -85,15 +85,15 @@
   and discarded the rest. The merge was also a cross product, so the surviving
   row's day and trajectory came from an arbitrary pairing rather than from that
   replicate. Chronos models counts at the replicate level, so this halved or
-  worse the data every model saw: `ChenGang_NVS089_JCT` has 31 replicates and
-  Chronos received 11.
+  worse the data every model saw: in one screen with 31 replicates, Chronos
+  received 11.
 
   The table is now built directly, one row per replicate, taking the day and
   trajectory from the sample (both are sample-level properties, and some
   workbooks fill them in on only one replicate row). Replicates with no readable
   `Days grown` are still dropped, and now counted in the log.
 
-  Across the 226 screens in `internal` and `external` that run Chronos, this
+  Across the 226 screens in a test collection that run Chronos, this
   takes it from 17,946 replicates to 37,840 — **2.11x**, with 19,894 previously
   discarded. 16 screens are unchanged because they genuinely have one replicate
   per sample. Every replicate name was checked to resolve to a real column in
