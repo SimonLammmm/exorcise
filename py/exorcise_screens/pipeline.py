@@ -51,6 +51,33 @@ class PipelineOptionsError(Exception):
     """A configuration file problem that stops the pipeline before it starts."""
 
 
+def read_counts(counts_file: str, index_col=None) -> pd.DataFrame:
+    """Read a counts table, keeping the guide and gene columns as text.
+
+    The first two columns of a counts file identify the guide and the gene. Most
+    libraries name them something obviously textual, but a few number their
+    guides 1, 2, 3... and at least one numbers its genes too. Pandas types a
+    column of bare numbers as int64, and integer identifiers break things in
+    three separate places:
+
+    * Chronos calls ``.encode("utf8")`` on the column labels of the readcounts
+      frame when it writes its HDF5 files, which raises AttributeError on an
+      int after the model has already been fitted;
+    * the negative controls are matched as strings, so they never line up with
+      an integer guidemap and Chronos loses its excess-variance estimate;
+    * the pseudocount is added to every non-object column, which means it lands
+      on the identifiers as well as on the counts.
+
+    Forcing the two identifier columns to str at the point of reading fixes all
+    three. It is done by name rather than by position so that it applies whether
+    or not the caller asks for the guide column as the index.
+    """
+    path = maybe_its_gz(counts_file)
+    header = pd.read_csv(path, sep="\t", nrows=0).columns
+    as_text = {name: str for name in header[:2]}
+    return pd.read_csv(path, sep="\t", index_col=index_col, dtype=as_text)
+
+
 #### DrugZ ####
 
 
@@ -93,7 +120,7 @@ def call_drugz_batch(sample_reps: Dict[str, list], days_grown, cell_line_hash,
     if drop_guide_less_than:
         temp_counts = f"{prefix}.tmp_drugz_counts.tsv"
         args.infile = temp_counts
-        counts = pd.read_csv(counts_file, index_col=0, sep="\t")
+        counts = read_counts(counts_file, index_col=0)
 
     try:
         for control_sample, treat_samples in control_map.items():
@@ -201,7 +228,7 @@ def call_mageck_batch(sample_reps: Dict[str, list], days_grown, cell_line_hash,
     # MAGeCK cannot read gzip and has no pseudocount option, so both are handled
     # by writing a temporary counts file.
     temp_counts = prefix + ".tmp_mageck_counts.tsv"
-    counts = pd.read_csv(maybe_its_gz(counts_file), sep="\t", index_col=0)
+    counts = read_counts(counts_file, index_col=0)
     if pseudocount > 1:
         numeric = counts.dtypes != object
         counts.loc[:, numeric] += pseudocount
@@ -242,7 +269,7 @@ def call_chronos_batch(sample_reps: Dict[str, list], days_grown: Dict[str, list]
     Chronos models growth over time, so it only applies to comparisons spanning
     more than one timepoint where the control is the earliest one.
     """
-    counts = pd.read_csv(maybe_its_gz(counts_file), sep="\t")
+    counts = read_counts(counts_file)
     if pseudocount > 1:
         numeric = counts.dtypes != object
         counts.loc[:, numeric] += pseudocount
@@ -344,35 +371,77 @@ def _chronos_negative_controls(guides: pd.Series, genes: pd.Series) -> pd.Series
     return guides.iloc[:0]
 
 
-def _unstack_to_frame(mapping: Dict[str, list], value_name: str) -> pd.DataFrame:
-    """Turn {sample: [values]} into a two-column sample/value frame."""
-    frame = (
-        pd.DataFrame(pd.DataFrame.from_dict(mapping, orient="index").unstack())
-        .reset_index()
-        .drop("level_0", axis=1)
-        .rename(columns={"level_1": "sample", 0: value_name})
-    )
-    return frame.loc[[v is not None for v in frame[value_name]]]
+def _first_present(values):
+    """The first usable value in a per-replicate list, or None.
+
+    Days grown and Trajectory describe the sample, so every replicate of a
+    sample carries the same value. Some workbooks fill them in on only one of
+    the replicate rows, which is why this takes the first rather than requiring
+    all of them.
+    """
+    for v in values or ():
+        if v is None:
+            continue
+        text = str(v).strip()
+        if text and text.lower() not in ("nan", "none"):
+            return text
+    return None
 
 
 def _chronos_sequence_map(sample_reps, days_grown, cell_line_hash) -> pd.DataFrame:
-    """The replicate/timepoint/cell-line table Chronos wants."""
-    sequences = _unstack_to_frame(sample_reps, "sequence_ID")
+    """The replicate/timepoint/trajectory table Chronos wants, one row per
+    replicate.
 
-    days = _unstack_to_frame(days_grown, "days")
-    days["days"] = days["days"].astype(float)
-    days = days.loc[[not math.isnan(d) for d in days["days"]]]
+    Chronos models counts at the replicate level, so every replicate has to be
+    listed. Until 3.1.4 this was built by merging three per-replicate frames on
+    `sample` and then calling `drop_duplicates(subset=["sample"])`, which kept
+    exactly one replicate per sample and silently discarded the rest: a screen
+    with three replicates handed Chronos a third of its data. The merge was also
+    a cross product, so the surviving row's day and trajectory came from an
+    arbitrary pairing rather than from that replicate.
 
-    lines = _unstack_to_frame(cell_line_hash, "cell_line_name")
-    lines["cell_line_name"] = lines["cell_line_name"].astype(str)
+    Rows whose day cannot be read are dropped, as before, because Chronos needs
+    a timepoint for every sequence it is given.
+    """
+    rows = []
+    dropped = 0
 
-    sequence_map = (
-        sequences.merge(days, on="sample", how="left")
-        .drop_duplicates(subset=["sample"])
-        .merge(lines, on="sample", how="left")
-        .drop_duplicates(subset=["sample"])
+    for sample, replicates in sample_reps.items():
+        day_text = _first_present(days_grown.get(sample))
+        line = _first_present(cell_line_hash.get(sample))
+
+        try:
+            day = float(day_text)
+        except (TypeError, ValueError):
+            day = float("nan")
+
+        for replicate in list_not_str(replicates) or ():
+            if replicate is None or not str(replicate).strip():
+                continue
+            if math.isnan(day):
+                dropped += 1
+                continue
+            rows.append({
+                "sequence_ID": str(replicate),
+                "sample": sample,
+                "days": day,
+                "cell_line_name": str(line),
+                "pDNA_batch": 0,
+            })
+
+    if dropped:
+        logger.warning(
+            f"{dropped} replicate(s) have no readable Days grown and were left "
+            "out of the Chronos sequence map."
+        )
+
+    sequence_map = pd.DataFrame(
+        rows, columns=["sequence_ID", "sample", "days", "cell_line_name", "pDNA_batch"]
     )
-    sequence_map["pDNA_batch"] = 0
+    logger.info(
+        f"Chronos sequence map: {len(sequence_map)} replicate(s) across "
+        f"{sequence_map['sample'].nunique()} sample(s)."
+    )
     return sequence_map
 
 
@@ -440,7 +509,7 @@ def _fit_chronos(group_map, readcounts, guidemap, negative_controls, group_prefi
     group_counts = readcounts[
         readcounts["sequence_ID"].isin(group_map["sequence_ID"])
     ].set_index("sequence_ID")
-    chronos.nan_outgrowths(group_counts, group_map, guidemap)
+    _mask_outgrowths(chronos, group_counts, group_map, guidemap, control_sample)
 
     common = dict(
         readcounts={"default": group_counts},
@@ -489,8 +558,172 @@ ANALYSIS_FUNCTIONS = {
     "dry": dry_function,
 }
 
+#: Methods this pipeline computes, each from a counts table.
+COUNTS_ANALYSES = ("mageck", "drugz", "chronos")
+
+#: Methods whose gene-level results are produced outside this pipeline and
+#: supplied as a finished table. Nothing is computed for them and no counts
+#: table is needed; the pipeline validates what was supplied and leaves it
+#: alone. A workbook using one of these exists to carry the metadata that the
+#: database build needs.
+SUPPLIED_ANALYSES = ("manual",)
+
+#: Statistics every supplied table must carry for each comparison. `score` and
+#: `pval` are what database.build._select_stat_columns reads back out.
+SUPPLIED_STATISTICS = ("score", "pval")
+
 #: The methods a configuration file may name.
-AVAILABLE_ANALYSES = ("mageck", "drugz", "chronos")
+AVAILABLE_ANALYSES = COUNTS_ANALYSES + SUPPLIED_ANALYSES
+
+
+#### Supplied results ####
+
+
+def expected_comparisons(control_groups: Dict[str, Dict[str, list]],
+                         groups, compjoiner=FILENAME_JOINER) -> List[str]:
+    """The comparison labels a set of control groups should produce.
+
+    Built the same way the analysis functions name their outputs, including
+    skipping a sample compared against itself, so that a supplied table can be
+    held to the same naming the computed ones use.
+    """
+    labels: List[str] = []
+    for group in groups:
+        for control, treat_samples in control_groups[group].items():
+            for treat in list_not_str(treat_samples):
+                if treat == control:
+                    continue
+                labels.append(f"{control}{compjoiner}{treat}")
+    return labels
+
+
+def supplied_table_path(output_dir, file_prefix: str, method: str) -> str:
+    """Where a supplied results table is expected to sit."""
+    return maybe_its_gz(os.path.join(
+        str(output_dir), "tables", f"{file_prefix}.{method}_table.csv"
+    ))
+
+
+def check_supplied_table(method: str, output_dir, file_prefix: str,
+                         control_groups: Dict[str, Dict[str, list]], groups,
+                         compjoiner=FILENAME_JOINER) -> str:
+    """Validate a results table that was produced outside this pipeline.
+
+    A supplied table is not checkable the way a computed one is: nothing here
+    made it, so the only thing standing between a typo and a silently wrong
+    database is this function. It is strict on purpose, and it reports every
+    problem it finds rather than stopping at the first.
+
+    The table is the double-headered CSV the tabulators write: comparison on
+    the first header row, statistic on the second, genes down the index.
+    """
+    path = supplied_table_path(output_dir, file_prefix, method)
+    if not os.path.isfile(path):
+        raise PipelineOptionsError(
+            f"The {method!r} method supplies its own results, but no table was "
+            f"found at {path}. Nothing computes it, so it has to be put there "
+            "before the pipeline runs."
+        )
+
+    try:
+        table = pd.read_csv(path, index_col=0, header=[0, 1])
+    except Exception as error:
+        raise PipelineOptionsError(
+            f"Could not read the supplied {method!r} table {path}: {error}. It "
+            "should be a CSV with two header rows, comparison then statistic, "
+            "and the gene in the first column."
+        ) from error
+
+    problems: List[str] = []
+
+    # Unnamed: N_level_1 is what pandas calls a blank cell on the second header
+    # row, which means the column has a comparison but no statistic.
+    unlabelled = [
+        str(c[0]) for c in table.columns if str(c[1]).startswith("Unnamed:")
+    ]
+    if unlabelled:
+        problems.append(
+            f"{len(unlabelled)} column(s) have no statistic on the second "
+            f"header row, e.g. {', '.join(sorted(set(unlabelled))[:3])}"
+        )
+
+    found = [str(c[0]) for c in table.columns]
+    expected = expected_comparisons(control_groups, groups, compjoiner)
+
+    repeated = sorted({c for c in expected if expected.count(c) > 1})
+    if repeated:
+        problems.append(
+            f"{len(repeated)} comparison(s) are defined more than once in "
+            f"Control groups: {', '.join(repeated[:5])}"
+        )
+
+    missing = sorted(set(expected) - set(found))
+    if missing:
+        problems.append(
+            f"{len(missing)} comparison(s) in the workbook are absent from the "
+            f"table: {', '.join(missing[:5])}"
+            + (" ..." if len(missing) > 5 else "")
+        )
+
+    extra = sorted(set(found) - set(expected))
+    if extra:
+        problems.append(
+            f"{len(extra)} comparison(s) in the table are absent from the "
+            f"workbook: {', '.join(extra[:5])}"
+            + (" ..." if len(extra) > 5 else "")
+        )
+
+    # Every comparison needs the full set of statistics, and needs each of them
+    # exactly once. A duplicate would be silently dropped on the way into the
+    # database, taking an arbitrary one of the two.
+    statistics: Dict[str, List[str]] = {}
+    for comparison, statistic in table.columns:
+        statistics.setdefault(str(comparison), []).append(str(statistic))
+
+    incomplete, duplicated = [], []
+    for comparison in set(found) & set(expected):
+        present = statistics[comparison]
+        if set(SUPPLIED_STATISTICS) - set(present):
+            incomplete.append(
+                f"{comparison} (has {', '.join(sorted(set(present)))})"
+            )
+        if len(present) != len(set(present)):
+            duplicated.append(comparison)
+    if incomplete:
+        problems.append(
+            f"{len(incomplete)} comparison(s) are missing one of "
+            f"{', '.join(SUPPLIED_STATISTICS)}: {'; '.join(sorted(incomplete)[:3])}"
+        )
+    if duplicated:
+        problems.append(
+            f"{len(duplicated)} comparison(s) have a repeated statistic "
+            f"column: {', '.join(sorted(duplicated)[:5])}"
+        )
+
+    if table.index.isna().any():
+        problems.append(f"{int(table.index.isna().sum())} row(s) have no gene")
+    if not table.index.is_unique:
+        repeats = table.index[table.index.duplicated()].unique()
+        problems.append(
+            f"{len(repeats)} gene(s) appear on more than one row: "
+            f"{', '.join(map(str, repeats[:5]))}"
+        )
+    if not len(table.index):
+        problems.append("the table has no genes")
+
+    if problems:
+        for problem in problems:
+            logger.error(problem)
+        raise PipelineOptionsError(
+            f"{len(problems)} problem(s) in the supplied {method!r} table "
+            f"{path}. See above."
+        )
+
+    logger.info(
+        f"Supplied {method!r} table {path} checked: {len(set(found))} "
+        f"comparison(s) matching the workbook, {len(table.index)} gene(s)."
+    )
+    return path
 
 
 #### Configuration ####
@@ -545,11 +778,34 @@ def validate_required_arguments(arguments: dict) -> None:
                 )
 
     samples = list(arguments.get("sample_reps") or {})
-    hyphenated = [s for s in samples if "-" in s]
+
+    # A '-' in a sample name is ambiguous in the comparison labels that the
+    # analysis functions build their output filenames from, and the tabulators
+    # rewrite the joiner with a plain str.replace, which would eat a hyphen
+    # inside a name. Neither of those happens for a method that supplies its
+    # own results: its table is matched by exact string and is never rewritten.
+    # So the rule is applied to the samples that a computed analysis could
+    # actually name, rather than to every sample in the workbook.
+    computed_groups = {
+        group
+        for analysis in analyses
+        if analysis.get("method") in COUNTS_ANALYSES
+        for group in (analysis.get("groups") or list(control_groups))
+    }
+    computed_samples = {
+        sample
+        for group in computed_groups
+        if group in control_groups
+        for control, treat_samples in control_groups[group].items()
+        for sample in [control, *list_not_str(treat_samples)]
+    }
+    hyphenated = sorted(s for s in computed_samples if "-" in s)
     if hyphenated:
         problems.append(
-            f"Sample name(s) contain '-', which separates the two halves of a "
-            f"comparison in output filenames: {', '.join(hyphenated)}"
+            f"{len(hyphenated)} sample name(s) contain '-', which separates "
+            f"the two halves of a comparison in output filenames: "
+            f"{', '.join(hyphenated[:5])}"
+            + (f" ... and {len(hyphenated) - 5} more" if len(hyphenated) > 5 else "")
         )
 
     unknown_samples = set()
@@ -587,8 +843,45 @@ def validate_required_arguments(arguments: dict) -> None:
         )
 
 
+def _check_methods(arguments: dict) -> None:
+    """Reject method names nothing knows how to handle.
+
+    This used to live inside _check_counts_files, in the branch taken only when
+    no counts file was given on the command line, so an unknown method passed
+    validation whenever --counts named a file.
+    """
+    unknown = sorted({
+        analysis["method"]
+        for analysis in arguments["analyses"]
+        if analysis["method"] not in AVAILABLE_ANALYSES
+    })
+    if unknown:
+        raise PipelineOptionsError(
+            f"Unknown method(s) {', '.join(repr(m) for m in unknown)}. "
+            f"Available methods: {', '.join(AVAILABLE_ANALYSES)}."
+        )
+
+
 def _check_counts_files(arguments: dict) -> None:
-    """Confirm each counts file is tab separated and holds every replicate."""
+    """Confirm each counts file is tab separated and holds every replicate.
+
+    Only the methods that read counts are considered. A workbook whose
+    analyses all supply their own results needs no counts table, and whatever
+    its Counts file cell happens to say is ignored rather than resolved.
+    """
+    needs_counts = [
+        analysis
+        for analysis in arguments["analyses"]
+        if analysis["method"] in COUNTS_ANALYSES
+    ]
+    if not needs_counts:
+        supplied = sorted({a["method"] for a in arguments["analyses"]})
+        logger.info(
+            f"No counts table is required: every analysis supplies its own "
+            f"results ({', '.join(supplied)})."
+        )
+        return
+
     replicates = [
         replicate
         for group in arguments["sample_reps"].values()
@@ -600,18 +893,14 @@ def _check_counts_files(arguments: dict) -> None:
     if global_counts and os.path.isfile(global_counts):
         counts_files.add(global_counts)
     else:
-        for analysis in arguments["analyses"]:
+        for analysis in needs_counts:
             if "counts_file" not in analysis:
                 raise PipelineOptionsError(
-                    f"No counts file for analysis {analysis.get('name', analysis)}. "
-                    "Set one on the Analyses sheet or pass --counts."
+                    f"No counts file for analysis {analysis.get('name', analysis)} "
+                    f"(method {analysis['method']}). Set one on the Analyses "
+                    "sheet or pass --counts."
                 )
             counts_files.add(analysis["counts_file"])
-            if analysis["method"] not in AVAILABLE_ANALYSES:
-                raise PipelineOptionsError(
-                    f"Unknown method {analysis['method']!r}. Available methods: "
-                    f"{', '.join(AVAILABLE_ANALYSES)}."
-                )
 
     if not counts_files:
         raise PipelineOptionsError("No counts file set for any analysis.")
@@ -687,6 +976,7 @@ def process_arguments(arguments: dict, delete_unrequired_args=True) -> dict:
     for sample, replicates in arguments["sample_reps"].items():
         arguments["sample_reps"][sample] = list_not_str(replicates)
 
+    _check_methods(arguments)
     _check_counts_files(arguments)
     _filter_by_name(arguments, "run_groups", "control_groups", "control groups")
     _filter_by_name(arguments, "run_analyses", "analyses", "analyses")
@@ -767,6 +1057,9 @@ def run_analyses(output_dir, file_prefix, sample_reps: Dict[str, list],
     methods_used = {analysis["method"] for analysis in analyses}
     os.makedirs(Path(output_dir, "tables"), exist_ok=True)
     for method in methods_used:
+        # A supplied method writes nothing, so it gets no working directory.
+        if method in SUPPLIED_ANALYSES:
+            continue
         os.makedirs(Path(output_dir, method, "files"), exist_ok=True)
 
     # (method, results_prefix, table_prefix) -> the control map it was run with,
@@ -776,18 +1069,33 @@ def run_analyses(output_dir, file_prefix, sample_reps: Dict[str, list],
     ran: Dict[tuple, dict] = {}
 
     for analysis in analyses:
-        method = "dry" if dry_run else analysis["method"]
+        method = analysis["method"]
 
         if method in skip_method:
             logger.info(f"Skipping method {method}")
             continue
+
+        groups = list_not_str(analysis.get("groups") or list(control_groups))
+
+        # Nothing computes a supplied method, so the table that was put there
+        # is checked instead and then left exactly as it is. Checking is
+        # read-only, so it is worth doing on a dry run too - validating the
+        # configuration is the whole point of one.
+        if method in SUPPLIED_ANALYSES:
+            check_supplied_table(
+                method, output_dir, file_prefix, control_groups, groups,
+                compjoiner,
+            )
+            continue
+
+        if dry_run:
+            method = "dry"
 
         # Defaults for a method can be set at the top level, and overridden per
         # analysis.
         default_kwargs = (methods_kwargs or {}).get(method) or {}
         kwargs = analysis.get("kwargs") or default_kwargs
         pseudocount = analysis.get("pseudocount", 1)
-        groups = list_not_str(analysis.get("groups") or list(control_groups))
 
         for group in groups:
             control_map = control_groups[group]

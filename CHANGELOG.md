@@ -1,5 +1,134 @@
 # Changelog
 
+## 3.1.4
+
+### Added
+
+- **`manual` is now a real method rather than something the pipeline tolerates
+  by accident.** A manual screen's gene-level scores and p-values are produced
+  outside this pipeline and supplied as a finished
+  `tables/result.manual_table.csv`; the workbook exists to carry the metadata
+  the database build needs. Previously the only way to get one through was to
+  keep an empty dummy counts table next to it, and nothing checked that the
+  supplied table had anything to do with the workbook describing it.
+
+  Methods are now split into `COUNTS_ANALYSES` (mageck, drugz, chronos), which
+  read a counts table, and `SUPPLIED_ANALYSES` (manual), which do not.
+
+  - **No counts table is required when every method is supplied.** Both the
+    pipeline and the database build skip the counts file entirely: the Counts
+    file cell may be blank, and if it does name something, that name is
+    ignored rather than resolved. The dummy file is no longer needed. Where a
+    workbook mixes manual with a computed method, the counts table is still
+    required, for the computed method's sake.
+  - **Nothing is run, written or overwritten for a supplied method.** No
+    `manual/files/` working directory is created, and the tabulation step
+    leaves the supplied table alone instead of writing over it.
+  - **The supplied table is validated instead.** Checked by both
+    `exorcise-analyse` and `exorcise-database`, since either may be the only
+    one the user runs, and all problems are reported together rather than one
+    at a time:
+    - the table exists where the method says it will, and parses as the
+      double-headered CSV the tabulators write;
+    - its comparisons match the workbook's Control groups **exactly**, in both
+      directions — a comparison in the workbook but not the table, or in the
+      table but not the workbook, is an error;
+    - no comparison is defined twice in Control groups;
+    - every comparison carries both `score` and `pval`, each exactly once
+      (these are what `database.build._select_stat_columns` reads back out);
+    - no column is missing its statistic on the second header row;
+    - the gene index has no blanks, no duplicates and is not empty.
+
+### Fixed
+
+- **A `-` in a sample name was rejected for workbooks that could never be
+  affected by one.** The restriction exists because the analysis functions join
+  a comparison into a filename with `-`, and the tabulators rewrite that joiner
+  with a plain `str.replace`, which would eat a hyphen inside a name. Neither
+  happens for a supplied method: its table is matched by exact string and never
+  rewritten. The check now applies to the samples a computed analysis could
+  actually name, so `Valentina_FGC0026` — 324 of whose samples contain a
+  hyphen, in labels like `..._1-24h_DDR` — no longer has to be renamed to
+  satisfy a rule that does not apply to it. All 262 workbooks in `internal` and
+  `external` give the same accept/reject outcome as they did in 3.1.3.
+
+- **An unknown method name passed validation whenever `--counts` named a
+  file.** The check sat inside the branch of `_check_counts_files` taken only
+  when no counts file was given on the command line, so `--counts
+  some/file.tsv` skipped it. It is now `_check_methods`, called unconditionally.
+
+- **Chronos crashed with `AttributeError: 'int' object has no attribute
+  'encode'` on libraries whose guides are numbered rather than named.**
+  For example, when a counts file
+  identifies guides as `1, 2, 3, ...`. Pandas types a column of bare numbers as
+  `int64`, so the readcounts frame handed to Chronos had integer column labels,
+  and `chronos.model.write_hdf5` calls `.encode("utf8")` on them. The model had
+  already been fitted by that point, so the whole fit was lost at the save step.
+
+  Counts tables are now read through a new `read_counts()` helper that forces
+  the first two columns — the guide and the gene — to text, by name so that it
+  applies whether or not the caller reads the guide column as the index. Count
+  values and their dtypes are untouched.
+
+  Two silent bugs went with it, both fixed by the same change:
+
+  - Negative controls are matched as strings, so on these libraries the control
+    sgRNA IDs never matched the integer guidemap and Chronos fell back to its
+    default excess variance.
+  - `pseudocount` is added to every non-object column, which included the guide
+    IDs. Only bites when a workbook sets a pseudocount above 1, but it would
+    have renumbered the library rather than adjusting the counts.
+
+- **Chronos was being given one replicate per sample.** `_chronos_sequence_map`
+  built its table by merging three per-replicate frames on `sample` and then
+  calling `drop_duplicates(subset=["sample"])`, which kept a single replicate
+  and discarded the rest. The merge was also a cross product, so the surviving
+  row's day and trajectory came from an arbitrary pairing rather than from that
+  replicate. Chronos models counts at the replicate level, so this halved or
+  worse the data every model saw: `ChenGang_NVS089_JCT` has 31 replicates and
+  Chronos received 11.
+
+  The table is now built directly, one row per replicate, taking the day and
+  trajectory from the sample (both are sample-level properties, and some
+  workbooks fill them in on only one replicate row). Replicates with no readable
+  `Days grown` are still dropped, and now counted in the log.
+
+  Across the 226 screens in `internal` and `external` that run Chronos, this
+  takes it from 17,946 replicates to 37,840 — **2.11x**, with 19,894 previously
+  discarded. 16 screens are unchanged because they genuinely have one replicate
+  per sample. Every replicate name was checked to resolve to a real column in
+  its counts file.
+
+  Inherited from crispr_tools, so this changes every Chronos result produced to
+  date. Regenerate rather than mixing old and new output.
+
+  It also removes the cause of the crash above: with all replicates present,
+  none of the four one-guide-per-gene screens has a group left where every
+  trajectory has a single late replicate. The guard stays as a backstop.
+
+- **Chronos crashed with `ZeroDivisionError` on a one-guide-per-gene library
+  whose group has a single late replicate per trajectory.** Occurs where the
+  first fromstart group trains and saves normally and the second dies before
+  training:
+
+  ```
+  File "chronos/model.py", line 475, in nan_outgrowths
+      print("found %i outgrowths, %1.1E of the total"
+            % (len(bad_rows), len(bad_rows)/len(lfc_stack)))
+  ZeroDivisionError: division by zero
+  ```
+
+  `nan_outgrowths` finds outgrowths by comparing a guide against its peers
+  within a trajectory, discarding first every case with only one guide *and*
+  one replicate. This library has 5887 guides for 5887 genes, so a group whose
+  trajectories each have one late replicate leaves nothing behind, and Chronos
+  divides by the length of the empty table. It is a missing guard upstream, not
+  a problem with the screen.
+
+  Outgrowth masking is skipped when both conditions hold, with a
+  `ZeroDivisionError` handler as a backstop. Nothing is maskable in that
+  situation, so no result changes and the model trains as it otherwise would.
+
 ## 3.1.3
 
 ### Fixed
@@ -88,8 +217,7 @@
   every Chronos run fell back to its no-negative-controls path. Both columns are
   now searched.
 
-  This is longstanding, inherited from crispr_tools, not new in 3.x. On
-  Almu_NVS097 it is the difference between 0 and 1000 negative controls.
+  This is longstanding, inherited from crispr_tools, not new in 3.x.
 
   Note that Chronos scores produced with negative controls are **not directly
   comparable** with scores produced without them: excess variance is now

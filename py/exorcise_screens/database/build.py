@@ -50,7 +50,17 @@ from exorcise_screens.util import (
     maybe_its_gz,
     normalise_text,
 )
-from exorcise_screens.workbook import AnalysisWorkbook, read_experiment_id
+from exorcise_screens.pipeline import (
+    COUNTS_ANALYSES,
+    SUPPLIED_ANALYSES,
+    check_supplied_table,
+    process_control_map,
+)
+from exorcise_screens.workbook import (
+    AnalysisWorkbook,
+    _safesplit,
+    read_experiment_id,
+)
 
 #: Separates a control from a treatment when a comparison is described in prose.
 FAT_ARROW = "➤"
@@ -81,7 +91,9 @@ class AnalysisInfo:
 
     experiment_id: str
     analysis_workbook: AnalysisWorkbook
-    counts_path: str
+    #: None when every method supplies its own results, since no counts table
+    #: is read in that case.
+    counts_path: Optional[str]
     results_paths: Dict[AnalysisType, Union[Path, str]]
 
 
@@ -106,20 +118,39 @@ def get_paths(details_xlsx: List[str], results_dir: Union[str, Path],
         workbook = AnalysisWorkbook(fn)
         experiment_id = workbook.experiment_details["Experiment name"]
 
+        # A workbook whose every method supplies its own results never reads a
+        # counts table, so it does not need to name one and the file does not
+        # have to exist. It used to, which meant keeping an empty dummy counts
+        # file around purely to satisfy this check.
+        methods = {
+            method
+            for methods_cell in workbook.analyses["Method"].dropna()
+            for method in _safesplit(methods_cell)
+        }
+        computed = methods & set(COUNTS_ANALYSES)
+
         counts_files = workbook.analyses["Counts file"].dropna().unique()
         counts_files = [c for c in counts_files if str(c).strip()]
-        if len(counts_files) != 1:
-            raise RuntimeError(
-                f"{fn} names {len(counts_files)} counts files "
-                f"({', '.join(map(str, counts_files))}). Exactly one is supported."
-            )
 
-        counts_path = maybe_its_gz(os.path.join(count_dir, counts_files[0]))
-        if not os.path.isfile(counts_path):
-            raise FileNotFoundError(
-                f"Counts file for experiment {experiment_id} not found at "
-                f"{counts_path}. Is --counts-dir right?"
+        counts_path = None
+        if not computed:
+            logger.info(
+                f"{experiment_id} needs no counts table: its method(s) "
+                f"({', '.join(sorted(methods))}) supply their own results."
             )
+        else:
+            if len(counts_files) != 1:
+                raise RuntimeError(
+                    f"{fn} names {len(counts_files)} counts files "
+                    f"({', '.join(map(str, counts_files))}). Exactly one is "
+                    "supported."
+                )
+            counts_path = maybe_its_gz(os.path.join(count_dir, counts_files[0]))
+            if not os.path.isfile(counts_path):
+                raise FileNotFoundError(
+                    f"Counts file for experiment {experiment_id} not found at "
+                    f"{counts_path}. Is --counts-dir right?"
+                )
 
         results_paths = {}
         for analysis_type in ANALYSESTYPES:
@@ -135,6 +166,30 @@ def get_paths(details_xlsx: List[str], results_dir: Union[str, Path],
                 f"No result tables found for {experiment_id} under "
                 f"{os.path.join(str(results_dir), experiment_id, 'tables')}. "
                 "It will contribute metadata but no statistics."
+            )
+
+        # A supplied table is the only evidence that the experiment produced
+        # anything, and nothing upstream would have failed if it were absent or
+        # out of step with the workbook, so it is checked here as well as in
+        # the pipeline. Whichever of the two the user runs, the database cannot
+        # be built from a table whose comparisons disagree with the metadata
+        # that describes them.
+        for method in sorted(methods & set(SUPPLIED_ANALYSES)):
+            groups = sorted({
+                group
+                for methods_cell, groups_cell in zip(
+                    workbook.analyses["Method"], workbook.analyses["Control group"]
+                )
+                if method in _safesplit(methods_cell)
+                for group in _safesplit(groups_cell)
+            })
+            control_groups = process_control_map(
+                workbook.expd["control_groups"], list(workbook.expd["sample_reps"])
+            )
+            groups = groups or list(control_groups)
+            check_supplied_table(
+                method, Path(results_dir) / experiment_id,
+                analysis_filename_prefix, control_groups, groups,
             )
 
         infos.append(AnalysisInfo(
