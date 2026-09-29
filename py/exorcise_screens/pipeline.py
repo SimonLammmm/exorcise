@@ -489,6 +489,50 @@ def _fit_chronos_without_controls(chronos, common, initial_screen_delay,
     return None
 
 
+def _mask_outgrowths(chronos, group_counts, group_map, guidemap,
+                     control_sample) -> None:
+    """Blank out clonal outgrowths before fitting, when that is safe to do.
+
+    Chronos's nan_outgrowths looks for guides whose late counts run away from
+    the rest, comparing each guide against the other guides for the same gene.
+    To do that it needs something to compare against, and it divides by a count
+    of comparable cases. In a one-guide-per-gene library where every trajectory
+    also has a single late replicate, there is no such case anywhere in the
+    screen and it raises ZeroDivisionError.
+
+    A library with several guides per gene always survives that filter however
+    few replicates it has. A one-guide-per-gene library does not, so both
+    conditions have to hold before masking is skipped - an earlier version of
+    this guard keyed on the replicate count alone and would have switched
+    masking off for the great majority of screens, which do not need it off.
+    """
+    late = group_map.loc[group_map["cell_line_name"] != "pDNA"]
+    per_trajectory = late.groupby("cell_line_name").size()
+
+    try:
+        per_gene = guidemap.groupby("gene").size()
+        one_guide_per_gene = len(per_gene) > 0 and int(per_gene.max()) <= 1
+    except Exception:
+        one_guide_per_gene = False
+
+    if one_guide_per_gene and len(per_trajectory) and (per_trajectory <= 1).all():
+        logger.info(
+            f"Not masking outgrowths for {control_sample}: the library has one "
+            "guide per gene and every trajectory has a single late replicate, "
+            "so there is nothing to compare a guide against."
+        )
+        return
+
+    try:
+        chronos.nan_outgrowths(group_counts, group_map, guidemap)
+    except ZeroDivisionError:
+        logger.warning(
+            f"Chronos found no comparable log fold changes while masking "
+            f"outgrowths for {control_sample}, so none were masked. The fit "
+            "continues on the unmasked counts."
+        )
+
+
 def _fit_chronos(group_map, readcounts, guidemap, negative_controls, group_prefix,
                  initial_screen_delay, control_sample) -> None:
     """Train and save one Chronos model.
