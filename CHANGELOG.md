@@ -1,6 +1,35 @@
 # Changelog
 
+## 3.1.5
+
+### Fixed
+
+- **Chronos raised `NameError: name '_mask_outgrowths' is not defined` on
+  every screen.** 3.1.4 replaced the direct `chronos.nan_outgrowths(...)` call
+  in `_fit_chronos` with a call to a new `_mask_outgrowths` helper, but the
+  helper itself never made it into the file: the call site was added and the
+  definition was not. Nothing caught it, because the name is only resolved when
+  the line runs, and the line runs only once Chronos is already underway —
+  past workbook parsing, past the counts read, past the sequence map, and
+  after the log has reported the negative controls it found. `python -m
+  py_compile` is happy with it.
+
+  This affected **every** Chronos run in 3.1.4, not a particular library or
+  workbook. MAGeCK and DrugZ were unaffected, as was the database build.
+
+  The helper is now present, with the behaviour 3.1.4's changelog described:
+  outgrowth masking is skipped only when the library has one guide per gene
+  *and* every trajectory has a single late replicate, and a `ZeroDivisionError`
+  out of `nan_outgrowths` is caught and downgraded to a warning so the fit
+  continues on unmasked counts.
+
+  Anyone who pulled the 3.1.4 image should replace it; 3.1.4 cannot have
+  produced a wrong Chronos result, only no result at all.
+
 ## 3.1.4
+
+> Superseded by 3.1.5, which fixes a crash that made this version's Chronos
+> unusable. Use 3.1.5 or later.
 
 ### Added
 
