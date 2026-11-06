@@ -40,11 +40,38 @@ from exorcise_screens.workbook import AnalysisWorkbook
 #: Joins control and treatment sample names in output filenames.
 FILENAME_JOINER = "-"
 
-#: Guides matching these are treated as negative controls by Chronos. The first
-#: pattern excludes Exorcise's own exo_Non-targeting labels so that the library
-#: designer's declared controls take precedence.
-CHRONOS_DESIGN_CONTROLS = r".*(?<!exo_)Non-targeting.*|.*_OR\d.*|.*_Cutting\d.*"
-CHRONOS_FALLBACK_CONTROLS = r".*Non-targeting.*|.*_OR\d.*|.*_Cutting\d.*"
+#: Guides matching these are treated as negative controls by Chronos: guides
+#: expected to produce no phenotype, which is what it estimates excess variance
+#: from and what it normalises readcounts against. The first pattern excludes
+#: Exorcise's own exo_Non-targeting labels so that a library designer's declared
+#: controls take precedence; the second accepts them.
+#:
+#: Both carried `.*_OR\d.*` until 3.1.6, inherited from crispr_tools, for
+#: libraries that name their cutting controls after olfactory receptors.
+#: Exorcise writes the gene symbol into exo_id, so against an exorcised library
+#: that pattern matched every guide targeting a real olfactory receptor gene --
+#: OR4F3, OR51B5, OR2I1P and the rest -- and handed Chronos thousands of
+#: targeting guides as "expected no phenotype". No library in use here declares
+#: OR cutting controls, so the pattern only ever fired as a false positive.
+#: Tried in this order, and the first set Chronos actually accepts is the one
+#: used. They are kept apart rather than combined because they are different
+#: claims about a guide, and Chronos does not accept them interchangeably: a
+#: declared non-targeting guide binds nothing, a cutting control cuts somewhere
+#: harmless, and an Exorcise label means only that the guide did not map. A
+#: screen whose cutting controls Chronos rejects may still fit on its
+#: non-targeting ones, which is why a rejection moves to the next set rather
+#: than straight to no controls at all.
+CHRONOS_CONTROL_PATTERNS = (
+    (r".*(?<!exo_)Non-targeting.*", "non-targeting controls declared by the library design"),
+    (r".*_Cutting\d.*", "cutting controls declared by the library design"),
+    (r".*Non-targeting.*", "Exorcise's unmapped-guide labels"),
+)
+
+#: Chronos raises rather than fit when fewer than 20 negative control sgRNAs
+#: survive its own filtering, so a set smaller than this is worse than none: it
+#: costs a fit that would otherwise have run on Chronos's default excess
+#: variance. Such a set is passed over in favour of the next pattern.
+CHRONOS_MIN_NEGATIVE_CONTROLS = 20
 
 
 class PipelineOptionsError(Exception):
@@ -270,11 +297,21 @@ def call_chronos_batch(sample_reps: Dict[str, list], days_grown: Dict[str, list]
     more than one timepoint where the control is the earliest one.
     """
     counts = read_counts(counts_file)
+    guide_column, gene_column = counts.columns[0], counts.columns[1]
+
+    # Candidates are chosen from the labels, which a pseudocount does not touch,
+    # but how well they were sequenced has to be read before one is added: a
+    # pseudocount turns an undetected guide into a guide that reads exactly the
+    # pseudocount, which is indistinguishable from a real low count by the time
+    # Chronos sees it.
+    control_candidates = _chronos_negative_control_candidates(
+        counts[guide_column], counts[gene_column]
+    )
+    _report_control_detection(counts, guide_column, control_candidates, counts_file)
+
     if pseudocount > 1:
         numeric = counts.dtypes != object
         counts.loc[:, numeric] += pseudocount
-
-    guide_column, gene_column = counts.columns[0], counts.columns[1]
 
     readcounts = (
         counts.drop(gene_column, axis=1)
@@ -285,9 +322,6 @@ def call_chronos_batch(sample_reps: Dict[str, list], days_grown: Dict[str, list]
     )
 
     guidemap = pd.DataFrame({"sgrna": counts[guide_column], "gene": counts[gene_column]})
-    negative_controls = _chronos_negative_controls(
-        counts[guide_column], counts[gene_column]
-    )
     sequence_map = _chronos_sequence_map(sample_reps, days_grown, cell_line_hash)
 
     for control_sample, treat_samples in control_map.items():
@@ -322,17 +356,19 @@ def call_chronos_batch(sample_reps: Dict[str, list], days_grown: Dict[str, list]
             continue
 
         _fit_chronos(
-            group_map, readcounts, guidemap, negative_controls, group_prefix,
+            group_map, readcounts, guidemap, control_candidates, group_prefix,
             min(timepoints), control_sample,
         )
 
 
-def _chronos_negative_controls(guides: pd.Series, genes: pd.Series) -> pd.Series:
-    """The sgRNA IDs of guides that do not target anything.
+def _chronos_negative_control_candidates(guides: pd.Series, genes: pd.Series):
+    """Ordered candidate sets of negative control guides, best claim first.
 
     Chronos uses these to estimate how much of the variance in a screen is noise
-    rather than biology. Without them it falls back to a flat default, which is a
-    worse model, so it is worth looking properly.
+    rather than biology, and to normalise readcounts against. Without them it
+    falls back to a flat default, which is a worse model, so it is worth looking
+    properly - and worth having more than one answer ready, because Chronos
+    checks the set it is given and rejects one it cannot normalise with.
 
     Which column names a control depends on the library. Exorcise writes the
     symbol into the guide ID, so `exo_id` carries it; libraries that were counted
@@ -340,35 +376,90 @@ def _chronos_negative_controls(guides: pd.Series, genes: pd.Series) -> pd.Series
     the control in the gene column instead. Both are searched, because only
     looking at the guide ID silently found nothing for the latter.
 
-    The designer's own controls are preferred over Exorcise's `exo_Non-targeting`
-    labels: the latter mean "this guide failed to map", which is not the same
-    claim as "this guide was built not to target anything".
+    Sets smaller than CHRONOS_MIN_NEGATIVE_CONTROLS are not offered at all:
+    Chronos refuses to fit with them, so offering one only costs a fit that
+    would have run on its default excess variance.
     """
     guides = guides.astype(str)
     genes = genes.astype(str)
 
-    for pattern, description in (
-        (CHRONOS_DESIGN_CONTROLS, "the library design"),
-        (CHRONOS_FALLBACK_CONTROLS, "Exorcise's unmapped-guide labels"),
-    ):
-        selected = guides[
-            guides.str.match(pattern) | genes.str.match(pattern)
-        ]
-        if len(selected):
-            logger.info(
-                f"Chronos is using {len(selected)} negative control guide(s) "
-                f"identified from {description}."
-            )
-            return selected
+    candidates = []
+    seen = set()
+    undersized = []
 
-    logger.warning(
-        "No negative control guides were found, so Chronos cannot estimate "
-        "excess variance and will fall back to its default. Controls are "
-        "recognised by matching /"
-        + CHRONOS_FALLBACK_CONTROLS
-        + "/ against either the guide or the gene column of the counts file."
-    )
-    return guides.iloc[:0]
+    for pattern, description in CHRONOS_CONTROL_PATTERNS:
+        selected = guides[guides.str.match(pattern) | genes.str.match(pattern)]
+        if len(selected) < CHRONOS_MIN_NEGATIVE_CONTROLS:
+            if len(selected):
+                undersized.append(f"{len(selected)} {description}")
+            continue
+        # A later pattern often matches everything an earlier one did. Offering
+        # the same set twice would just repeat a rejection.
+        fingerprint = frozenset(selected)
+        if fingerprint in seen:
+            continue
+        seen.add(fingerprint)
+        candidates.append((description, selected))
+
+    if candidates:
+        logger.info(
+            "Negative control guides available to Chronos: "
+            + "; ".join(f"{len(s)} from {d}" for d, s in candidates)
+            + ". The first set Chronos accepts will be used."
+        )
+    elif undersized:
+        logger.warning(
+            "Too few negative control guides to fit with (found "
+            + "; ".join(undersized)
+            + f", and Chronos needs at least {CHRONOS_MIN_NEGATIVE_CONTROLS}). "
+            "Continuing without them, on Chronos's default excess variance."
+        )
+    else:
+        logger.warning(
+            "No negative control guides were found, so Chronos cannot estimate "
+            "excess variance and will fall back to its default. Controls are "
+            "recognised by matching any of "
+            + ", ".join("/" + p + "/" for p, _ in CHRONOS_CONTROL_PATTERNS)
+            + " against either the guide or the gene column of the counts file."
+        )
+    return candidates
+
+
+def _report_control_detection(counts, guide_column, candidates, counts_file) -> None:
+    """Say how much of each candidate control set the sequencing actually saw.
+
+    Chronos normalises each replicate so that the median of its negative
+    controls lines up with the median in the pDNA samples. A control guide that
+    was never sequenced carries nothing for that median, and a set that is
+    mostly undetected gives a median that is really just the detection floor --
+    or, once a pseudocount has been added, the pseudocount itself. Chronos then
+    rejects the set, and what it says when it does is a paragraph about
+    normalisation that never mentions the counts.
+
+    So the state of the counts is worth reporting here, before any of that, in
+    terms of the file the user can go and look at.
+    """
+    numeric = counts.select_dtypes("number")
+    if numeric.empty:
+        return
+
+    guides = counts[guide_column].astype(str)
+    for description, control_guides in candidates:
+        rows = guides.isin(set(control_guides))
+        block = numeric.loc[rows]
+        if block.empty:
+            continue
+        detected = int((block > 0).all(axis=1).sum())
+        if detected >= CHRONOS_MIN_NEGATIVE_CONTROLS:
+            continue
+        logger.warning(
+            f"Only {detected} of the {len(block)} negative control guide(s) "
+            f"from {description} were detected in every sample of "
+            f"{os.path.basename(counts_file)}. Chronos normalises against the "
+            "median of these, so a set this sparse carries almost no signal and "
+            "it will probably reject the set. This is a property of the "
+            "sequencing depth, not of the annotation."
+        )
 
 
 def _first_present(values):
@@ -458,13 +549,20 @@ def _fit_chronos_without_controls(chronos, common, initial_screen_delay,
 
     Returns None if it cannot be fitted, having said why.
     """
+    # Excess variance has to be supplied explicitly on this path. Chronos
+    # estimates it from negative control sgRNAs, and there are none here, so it
+    # leaves the value an empty dict and then rejects it with "excess_variance
+    # was passed as dict without key for 'default'". Until 3.1.6 two of the
+    # three attempts here omitted it and so could never have succeeded; they
+    # only added that message to every failure report.
     attempts = (
         ("supplying the default excess variance",
          dict(excess_variance=CHRONOS_DEFAULT_EXCESS_VARIANCE,
               initial_screen_delay=initial_screen_delay)),
-        ("letting Chronos estimate excess variance",
-         dict(initial_screen_delay=initial_screen_delay)),
-        ("with default settings", {}),
+        # A Chronos too old to accept initial_screen_delay. The excess variance
+        # is not optional, so that is what the retry drops.
+        ("supplying the default excess variance, without initial_screen_delay",
+         dict(excess_variance=CHRONOS_DEFAULT_EXCESS_VARIANCE)),
     )
 
     failures = []
@@ -478,13 +576,33 @@ def _fit_chronos_without_controls(chronos, common, initial_screen_delay,
         except Exception as error:
             failures.append(f"{description}: {error}")
 
+    # Attribute the failure to the right thing. "estimated efficacy outside
+    # bounds" is Chronos rejecting the screen's own fold changes -- it found no
+    # depletion to scale against in at least one replicate -- and no amount of
+    # relabelling negative controls will change that.
+    rejected_data = any("efficacy outside bounds" in f for f in failures)
+    if rejected_data:
+        advice = (
+            "\n  Chronos rejected the screen's fold changes rather than its "
+            "configuration: in at least one replicate the guides that deplete "
+            "most across the group do not deplete at all, so it cannot estimate "
+            "how efficiently that replicate was edited. That is usually a "
+            "vehicle or untreated arm carried as its own trajectory, a screen "
+            "too short for depletion to show, or a control timepoint whose "
+            "replicates disagree. MAGeCK and DrugZ are unaffected."
+        )
+    else:
+        advice = (
+            "\n  Negative controls are what Chronos estimates excess variance "
+            "from; check that the counts file labels them in either its guide "
+            "or its gene column."
+        )
+
     logger.warning(
         f"Chronos could not fit {control_sample} without negative controls, so "
         f"this comparison has no Chronos result. Attempts:\n    "
         + "\n    ".join(failures)
-        + "\n  Negative controls are what Chronos estimates excess variance "
-        "from; check that the counts file labels them in either its guide or "
-        "its gene column."
+        + advice
     )
     return None
 
@@ -533,7 +651,7 @@ def _mask_outgrowths(chronos, group_counts, group_map, guidemap,
         )
 
 
-def _fit_chronos(group_map, readcounts, guidemap, negative_controls, group_prefix,
+def _fit_chronos(group_map, readcounts, guidemap, control_candidates, group_prefix,
                  initial_screen_delay, control_sample) -> None:
     """Train and save one Chronos model.
 
@@ -561,18 +679,28 @@ def _fit_chronos(group_map, readcounts, guidemap, negative_controls, group_prefi
         guide_gene_map={"default": guidemap},
     )
 
+    # Each candidate set in turn. Chronos checks the controls it is given --
+    # it has to normalise the readcounts so their medians line up against the
+    # pDNA samples -- and a set it rejects says nothing about the next one, so a
+    # rejection moves on rather than abandoning controls altogether.
     model = None
-    if len(negative_controls):
+    for description, negative_controls in control_candidates:
         try:
             model = chronos.Chronos(
                 negative_control_sgrnas={"default": negative_controls},
                 initial_screen_delay=initial_screen_delay,
                 **common,
             )
+            logger.info(
+                f"Chronos fitted {control_sample} on {len(negative_controls)} "
+                f"negative control guide(s) from {description}."
+            )
+            break
         except Exception as error:
             logger.warning(
-                f"Chronos rejected the negative controls for {control_sample} "
-                f"({error}); retrying without them."
+                f"Chronos rejected the {len(negative_controls)} negative "
+                f"control guide(s) from {description} for {control_sample} "
+                f"({error})."
             )
 
     if model is None:
@@ -1170,3 +1298,16 @@ def run_analyses(output_dir, file_prefix, sample_reps: Dict[str, list],
         )
         logger.info(f"Writing table: {table_fn}")
         table.to_csv(table_fn, encoding="utf-8-sig")
+
+        # An empty table means every comparison failed. Each failure was warned
+        # about as it happened, but those scroll past in a long run and the file
+        # that gets left behind looks like a result: the database build reads an
+        # unparseable or empty table as "this method contributed nothing" rather
+        # than as an error. Say so once, plainly, at the point it is known.
+        if table.empty:
+            logger.warning(
+                f"{method} produced no results for any comparison, so "
+                f"{table_fn} is empty. The reason for each comparison is in the "
+                "warnings above. Nothing downstream treats this as an error, so "
+                "this is the only place it is reported."
+            )

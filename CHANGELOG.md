@@ -1,5 +1,111 @@
 # Changelog
 
+## 3.1.6
+
+### Removed
+
+- **The bundled exome is no longer copied into the Docker image.** `data/` was
+  copied to `/exorcise/data/`, but no documented run ever read it: every example
+  passes `--exome` as a path under the bind mount at `/data`, so the exome that
+  got used was always the one in the user's own working directory. The copy in
+  the image was a duplicate that nothing referenced and that could only drift
+  from the repository.
+
+  `data/` stays in the repository, and is still where the examples point. Users
+  who work only from the image and have no exome of their own now download one;
+  the Docker Hub README gives the URL alongside the genome.
+
+  No code path is affected. Nothing in `R/`, `bin/`, `py/` or the entrypoint ever
+  defaulted to `/exorcise/data`, and `--exome` has always been required.
+
+### Fixed
+
+- **Chronos was being given guides that target olfactory receptor genes as
+  negative controls.** Both control patterns carried `.*_OR\d.*`, inherited
+  from crispr_tools, for libraries that name their cutting controls after
+  olfactory receptors. Exorcise writes the gene symbol into `exo_id`, so against
+  an exorcised library that pattern matched every guide targeting a real
+  olfactory receptor gene, of which the human genome has about 400.
+
+  Negative controls are guides Chronos is told produce no phenotype. It
+  normalises the readcounts so their medians line up against the pDNA samples
+  and estimates excess variance from them, so a set full of targeting guides
+  does not merely waste the estimate, it distorts the fit. In the screens to
+  hand it matched 6247 guides in one, 2637 in another, 2615 in a third -- all of
+  them OR4F3, OR51B5, OR2I1P and the like -- and in every case the pattern fired
+  only as a false positive. Where a library also declared genuine non-targeting
+  controls, those were diluted with the OR guides rather than used on their own.
+
+  `.*_Cutting\d.*` stays. It matches declared controls, labelled `Cutting1_1`
+  and so on in the gene column, and no gene symbol collides with it.
+
+- **A negative control set Chronos rejected meant the fit continued with no
+  controls at all.** The candidate sets are now tried in turn -- non-targeting
+  controls declared by the library, then declared cutting controls, then
+  Exorcise's own unmapped-guide labels -- and the first Chronos accepts is used.
+  They are kept apart rather than merged because they are different claims about
+  a guide and Chronos does not take them interchangeably. One screen here
+  demonstrates it: Chronos rejects its 3790 declared non-targeting controls as
+  something it cannot normalise with, and then fits perfectly well on the 5443
+  guides Exorcise marked as unmapped. Under the old code that first rejection
+  ended the matter and the screen produced nothing.
+
+- **Control sets too small to fit with were used anyway.** Chronos raises
+  "Fewer than 20 negative control sgRNAs remaining" rather than fit with fewer
+  than 20, so a smaller set is worse than none: it costs the fit that would
+  otherwise have run on Chronos's default excess variance. One screen here
+  offered 5, took them, and lost Chronos entirely. Sets below
+  `CHRONOS_MIN_NEGATIVE_CONTROLS` are now passed over, and the shortfall is
+  reported.
+
+- **Two of the three attempts to fit without negative controls could never have
+  succeeded.** Excess variance has to be supplied explicitly on that path --
+  Chronos estimates it from negative controls, and there are none -- so the two
+  attempts that omitted it always failed with `excess_variance was passed as
+  dict without key for 'default'`. They only added that message to every failure
+  report. What remains is the attempt that supplies the value, and a retry
+  without `initial_screen_delay` for a Chronos too old to accept it.
+
+- **A failure to fit is now attributed to the right thing.** The advice printed
+  after an unsuccessful fit always pointed at the negative controls. When
+  Chronos raises "estimated efficacy outside bounds" it has rejected the
+  screen's own fold changes -- in at least one replicate the guides that deplete
+  most across the group do not deplete at all -- and relabelling controls cannot
+  change that. The two cases now say different things.
+
+- **Sparse negative controls are reported before Chronos chokes on them.** How
+  well the control guides were actually sequenced is now checked against the
+  counts file, before any pseudocount is added, and a set mostly missing from
+  the samples is called out. This has to happen before the pseudocount: adding
+  one turns an undetected guide into a guide reading exactly the pseudocount,
+  indistinguishable from a real low count by the time Chronos sees it. One
+  screen here offers 80 non-targeting controls of which 1 is detected in every
+  sample; another offers 7049 of which none are. Chronos rejects both, with a
+  paragraph about normalisation that never mentions the counts.
+
+- **An empty results table is no longer silent.** When every comparison fails,
+  the tabulation step still writes the table, and a method that produced nothing
+  left behind a file that looked like a result: the database build reads an
+  empty table as "this method contributed nothing" rather than as an error, and
+  the pipeline exits 0. It now warns once, naming the file, at the point it is
+  known.
+
+- **The image's permission check no longer names a file the image does not
+  have.** That check exists to fail the build rather than ship an image that
+  only root can read, and it listed the bundled exome. With the exome no longer
+  copied, `stat` on it failed, and because the check runs under `set -e` inside
+  a bare assignment, the build aborted on a `stat: cannot statx` that said
+  nothing about the real cause. The exome is off the list; the rest of it, which
+  is what guards Singularity and `docker run --user`, is unchanged.
+
+### Documentation
+
+- A Docker Hub README, `docker/README.dockerhub.md`, trimmed to that audience
+  and to Docker Hub's 25,000 byte limit. It drops the conda, source install,
+  repository layout and versioning sections, says what the image does and does
+  not contain, notes that `example/` is not copied, and gives the `curl` lines
+  for the genome and the exome. `README.md` remains the full documentation.
+
 ## 3.1.5
 
 ### Fixed

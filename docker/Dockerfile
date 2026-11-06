@@ -60,13 +60,15 @@ ENV EXORCISE_BLAT="${MAMBA_ROOT}/envs/exorcise/bin/blat"
 ENV EXORCISE_TWOBITTOFA="${MAMBA_ROOT}/envs/exorcise/bin/twoBitToFa"
 
 # Now the source. env/ is included so the pinned versions can be inspected from
-# inside a running container, and data/ because the bundled human exome is small
-# and immediately useful. example/ and manuscript/ are not copied.
+# inside a running container. data/, example/ and manuscript/ are not copied:
+# the exome in data/ was never read by any documented run, which passes an
+# --exome path under the bind mount at /data, so the copy at /exorcise/data was
+# a duplicate that could only drift. Users without an exome of their own
+# download one; the Docker Hub README says where from.
 COPY R/ ${EXORCISE_HOME}/R/
 COPY bin/ ${EXORCISE_HOME}/bin/
 COPY py/ ${EXORCISE_HOME}/py/
 COPY env/ ${EXORCISE_HOME}/env/
-COPY data/ ${EXORCISE_HOME}/data/
 COPY docker/entrypoint.sh ${EXORCISE_HOME}/docker/entrypoint.sh
 # VERSION is not documentation: every entry point reads the project version from
 # it at runtime, and pip reads it at install time.
@@ -95,8 +97,7 @@ RUN set -e; \
              "${EXORCISE_HOME}/bin/exorcise" \
              "${EXORCISE_HOME}/bin/exorcise.R" \
              "${EXORCISE_HOME}/R/common.R" \
-             "${EXORCISE_HOME}/VERSION" \
-             "${EXORCISE_HOME}/data/hsa.grch38.refseqall.tsv.gz"; do \
+             "${EXORCISE_HOME}/VERSION"; do \
       perms=$(stat -c '%a' "$f"); \
       case "$perms" in *[4567]) ;; *) echo "NOT WORLD-READABLE: $f ($perms)" >&2; exit 1 ;; esac; \
     done; \
