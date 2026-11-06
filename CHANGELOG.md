@@ -1,5 +1,76 @@
 # Changelog
 
+## 3.1.9
+
+### Fixed
+
+- **Chronos tables carried comparisons the workbook never declared.** 3.1.8
+  removed the case where a control was compared against itself. That was one
+  symptom of a wider fault, and this is the rest of it.
+
+  Chronos reports one row per trajectory, so `tabulate_chronos` maps those rows
+  back to sample names through the workbook's Trajectory column. A trajectory is
+  one arm followed over time, so its value is shared by every sample on it, and
+  the mapping is one-to-many: every sample sharing a trajectory with one Chronos
+  modelled got a column, whatever the workbook asked for. Across the screens to
+  hand that produced undeclared comparisons in 41 of them, in two shapes --
+  samples named in no comparison at all appearing anyway, including ones whose
+  names say they were not meant to be used, and samples that are perfectly valid
+  but paired with a control they were never declared against.
+
+  `ctrl_map`, the comparison map the pipeline assembles, has been passed to the
+  tabulators since the crispr_tools merge. Every one of them accepted it and
+  none read it. `tabulate_chronos` now does: where the map names the control,
+  its declared treatment samples are the whole of what belongs in that model's
+  columns, and anything else is dropped and logged. Where the map does not cover
+  the control -- an older results directory, or a tabulation run without one --
+  nothing is assumed beyond the case that is wrong on its own terms, a control
+  compared against itself, so 3.1.8's behaviour remains the floor.
+
+  Putting `Unused` in the Trajectory column also stops this, by breaking the
+  match, and remains worth doing because a sample that should not be analysed
+  should not carry a trajectory. It is no longer what stands between a stray
+  Trajectory entry and a wrong comparison in the output.
+
+  MAGeCK and DrugZ were never affected: they take their comparisons from result
+  filenames, which name both sides.
+
+- **MAGeCK and DrugZ tables now carry only the comparisons the workbook
+  attests.** Results accumulate on disk. Edit a workbook and re-run without
+  clearing the results directory and the files describing the previous shape of
+  the screen are still there, named after comparisons the workbook no longer
+  makes. All three tabulators find their inputs by globbing the results prefix,
+  so those files were read and their comparisons tabulated, and from there they
+  reached the database as statistics that no metadata describes: nothing names
+  them in Experiment or Comparison details, because nothing in the workbook
+  names them at all.
+
+  The control map now decides for MAGeCK and DrugZ as it already did for
+  Chronos. A comparison the map does not attest is named in a warning and left
+  out of the table rather than carried forward quietly, so a re-run over an
+  uncleared directory reports what it found instead of silently widening the
+  database. Clearing the results directory before re-running is still the way to
+  avoid this; the change makes failing to do so visible.
+
+  The two tabulators do not spell a comparison the same way -- MAGeCK strips
+  every dot out of the filename it parses, DrugZ strips only the separator -- so
+  the attested labels are put through whatever the reading tabulator did before
+  they are compared. Comparing them raw would make every comparison on a screen
+  whose sample names contain dots look unattested.
+
+  Where no control map is available, nothing is excluded: an absent map means
+  nothing can be concluded, not that nothing is attested.
+
+- **The control maps of several groups are no longer collapsed to the last
+  one.** `run_analyses` recorded the map for tabulation with
+  `ran[key] = control_map` inside the per-group loop, so where a method ran on
+  more than one control group only the final group's map survived to be
+  tabulated. Nothing read the map, so nothing noticed. It is now accumulated
+  across groups, which it had to be before `tabulate_chronos` could restrict
+  anything to it -- otherwise every earlier group's comparisons would have been
+  dropped as undeclared. No screen here runs Chronos on more than one group, so
+  this corrects a hazard rather than an observed fault.
+
 ## 3.1.8
 
 ### Fixed

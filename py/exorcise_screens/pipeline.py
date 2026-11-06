@@ -1278,7 +1278,18 @@ def run_analyses(output_dir, file_prefix, sample_reps: Dict[str, list],
                 f"Running {method} on group {group} with kwargs {kwargs} "
                 f"and counts {current_counts}"
             )
-            ran[(method, out_prefix, file_prefix)] = control_map
+            # Accumulated, not assigned. Several groups can run into one
+            # prefix and tabulation happens once over the lot, so assigning
+            # kept only the last group's map. That was harmless while nothing
+            # read it; it is not now that tabulate_chronos restricts its
+            # columns to what the map declares, and would have dropped every
+            # earlier group's comparisons as undeclared.
+            declared = ran.setdefault((method, out_prefix, file_prefix), {})
+            for ctrl, treats in control_map.items():
+                known = declared.setdefault(ctrl, [])
+                for treat in list_not_str(treats):
+                    if treat not in known:
+                        known.append(treat)
 
             ANALYSIS_FUNCTIONS[method](
                 sample_reps, days_grown, cell_line_hash, control_map,
