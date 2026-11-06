@@ -1,5 +1,47 @@
 # Changelog
 
+## 3.1.7
+
+### Fixed
+
+- **`exorcise-database` was killed outright when a collection contained a very
+  large screen.** `insert_records` built one ORM object per row and handed the
+  whole list to `session.add_all`. With `tabulate_statistics` returning a
+  DataFrame, `to_dict(orient="records")` turning all of it into dicts, and then
+  one ORM object per dict, an experiment existed three times over in memory
+  before a single row reached SQLite.
+
+  That is affordable for most screens and not for all of them. One screen here
+  has 21,107,459 statistics rows -- about 420 comparisons across 27,000 genes,
+  for two methods -- and processing it alone took the container from 14.5 GiB to
+  the 22.94 GiB it was allowed, at which point the Linux OOM killer sent
+  SIGKILL. A killed process does not raise, log, roll back or clean up, which is
+  why this looked like the command quietly stopping: no traceback, nothing from
+  Docker, and a part-written `database.db` left behind beside its rollback
+  journal. `docker inspect` is where it shows up, as `OOMKilled=true` and exit
+  code 137.
+
+  Rows now go in through a SQLAlchemy Core bulk insert, in chunks of
+  `INSERT_CHUNK_SIZE`, and `iter_frame_records` materialises the dicts a chunk
+  at a time instead of all at once. No ORM object is built at any point. On the
+  same 21-million-row screen, resident memory is flat at about 2.5 GiB for the
+  whole insert rather than climbing until the process dies, and peak memory no
+  longer depends on how large the biggest experiment is.
+
+  Batching the workbooks across several invocations would not have helped, since
+  the peak came from one experiment rather than from their accumulation; a batch
+  containing that screen would have failed on its own.
+
+  The single commit in `write_db_files` is deliberately unchanged, so a build is
+  still all or nothing.
+
+- **NaN values are now written as NULL rather than having their key dropped.** A
+  bulk insert compiles one statement per chunk and binds every row to it, so the
+  rows in a chunk have to agree on their columns; dropping a key per row gave a
+  different set for each. Dropping it was there to let column defaults apply, and
+  no column in the schema declares a default, so a missing key and an explicit
+  None both reach the database as NULL. No stored value changes.
+
 ## 3.1.6
 
 ### Removed
