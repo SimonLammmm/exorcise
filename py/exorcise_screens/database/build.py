@@ -596,16 +596,69 @@ def reindex_database(db_dir: Union[str, Path]) -> None:
         logger.info(f"  {table}: {', '.join(indexes) if indexes else 'no indexes'}")
 
 
-def insert_records(table: Type[TableBase], records: List[dict],
+#: Rows per bulk insert. Large enough that the per-chunk overhead is
+#: negligible next to the work, small enough that one chunk's bound parameters
+#: are tens of megabytes rather than a whole experiment's.
+INSERT_CHUNK_SIZE = 50_000
+
+
+def _insert_chunk(table: Type[TableBase], rows: List[dict],
+                  session: Session) -> None:
+    """Insert one chunk as a single bulk statement.
+
+    NaN becomes None rather than having its key dropped. A bulk insert compiles
+    one statement and binds every row in the chunk to it, so the rows have to
+    agree on their keys; dropping a key per row, which is what this did until
+    3.1.7, gives a different set of columns for each. Dropping it was there to
+    let column defaults apply, and no column in the schema declares one, so a
+    missing key and an explicit None both arrive as NULL either way.
+    """
+    session.execute(
+        sqlalchemy.insert(table),
+        [{k: (None if pd.isna(v) else v) for k, v in row.items()} for row in rows],
+    )
+
+
+def insert_records(table: Type[TableBase], records: typing.Iterable[dict],
                    session: Session) -> None:
-    """Insert rows, dropping null values so that column defaults apply.
+    """Insert rows a chunk at a time.
 
     Fails if a primary key already exists.
+
+    Until 3.1.7 this built one ORM object per row and passed the lot to
+    `session.add_all`, so an entire experiment existed as Python objects at
+    once, on top of the dicts they were built from and the DataFrame those came
+    from. That is three copies of the same data, and the largest screen here has
+    21 million statistics rows: more than the container had memory for. The
+    process was killed by the OOM killer rather than raising, which is why it
+    left a part-written database and its journal behind without logging
+    anything.
+
+    A Core insert builds no ORM objects at all, and chunking bounds what is
+    alive at any moment, so peak memory no longer scales with the largest
+    experiment. The single commit in write_db_files is unchanged: the build is
+    still all or nothing.
     """
-    session.add_all([
-        table(**{k: v for k, v in record.items() if not pd.isna(v)})
-        for record in records
-    ])
+    buffer: List[dict] = []
+    for record in records:
+        buffer.append(record)
+        if len(buffer) >= INSERT_CHUNK_SIZE:
+            _insert_chunk(table, buffer, session)
+            buffer = []
+    if buffer:
+        _insert_chunk(table, buffer, session)
+
+
+def iter_frame_records(frame: pd.DataFrame,
+                       chunk_size: int = INSERT_CHUNK_SIZE) -> typing.Iterator[dict]:
+    """The frame's rows as dicts, materialised a chunk at a time.
+
+    `frame.to_dict(orient="records")` over the whole frame builds every dict up
+    front, which for the largest screens is gigabytes before a single row
+    reaches the database.
+    """
+    for start in range(0, len(frame), chunk_size):
+        yield from frame.iloc[start:start + chunk_size].to_dict(orient="records")
 
 
 def get_gene_symbols_in_db(session: Session) -> set:
@@ -643,7 +696,7 @@ def add_statistics(analysis_infos: List[AnalysisInfo], session: Session) -> None
 
         add_genes_from_symbols(table.gene_id, organism, session)
         logger.info(f"Adding {table.shape[0]} statistics rows from {info.experiment_id}")
-        insert_records(StatTable, table.to_dict(orient="records"), session)
+        insert_records(StatTable, iter_frame_records(table), session)
 
 
 def write_db_files(outdir: Union[str, Path], analysis_infos: List[AnalysisInfo],

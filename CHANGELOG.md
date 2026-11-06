@@ -1,5 +1,270 @@
 # Changelog
 
+## 3.1.9
+
+### Fixed
+
+- **Chronos tables carried comparisons the workbook never declared.** 3.1.8
+  removed the case where a control was compared against itself. That was one
+  symptom of a wider fault, and this is the rest of it.
+
+  Chronos reports one row per trajectory, so `tabulate_chronos` maps those rows
+  back to sample names through the workbook's Trajectory column. A trajectory is
+  one arm followed over time, so its value is shared by every sample on it, and
+  the mapping is one-to-many: every sample sharing a trajectory with one Chronos
+  modelled got a column, whatever the workbook asked for. Across the screens to
+  hand that produced undeclared comparisons in 41 of them, in two shapes --
+  samples named in no comparison at all appearing anyway, including ones whose
+  names say they were not meant to be used, and samples that are perfectly valid
+  but paired with a control they were never declared against.
+
+  `ctrl_map`, the comparison map the pipeline assembles, has been passed to the
+  tabulators since the crispr_tools merge. Every one of them accepted it and
+  none read it. `tabulate_chronos` now does: where the map names the control,
+  its declared treatment samples are the whole of what belongs in that model's
+  columns, and anything else is dropped and logged. Where the map does not cover
+  the control -- an older results directory, or a tabulation run without one --
+  nothing is assumed beyond the case that is wrong on its own terms, a control
+  compared against itself, so 3.1.8's behaviour remains the floor.
+
+  Putting `Unused` in the Trajectory column also stops this, by breaking the
+  match, and remains worth doing because a sample that should not be analysed
+  should not carry a trajectory. It is no longer what stands between a stray
+  Trajectory entry and a wrong comparison in the output.
+
+  MAGeCK and DrugZ were never affected: they take their comparisons from result
+  filenames, which name both sides.
+
+- **MAGeCK and DrugZ tables now carry only the comparisons the workbook
+  attests.** Results accumulate on disk. Edit a workbook and re-run without
+  clearing the results directory and the files describing the previous shape of
+  the screen are still there, named after comparisons the workbook no longer
+  makes. All three tabulators find their inputs by globbing the results prefix,
+  so those files were read and their comparisons tabulated, and from there they
+  reached the database as statistics that no metadata describes: nothing names
+  them in Experiment or Comparison details, because nothing in the workbook
+  names them at all.
+
+  The control map now decides for MAGeCK and DrugZ as it already did for
+  Chronos. A comparison the map does not attest is named in a warning and left
+  out of the table rather than carried forward quietly, so a re-run over an
+  uncleared directory reports what it found instead of silently widening the
+  database. Clearing the results directory before re-running is still the way to
+  avoid this; the change makes failing to do so visible.
+
+  The two tabulators do not spell a comparison the same way -- MAGeCK strips
+  every dot out of the filename it parses, DrugZ strips only the separator -- so
+  the attested labels are put through whatever the reading tabulator did before
+  they are compared. Comparing them raw would make every comparison on a screen
+  whose sample names contain dots look unattested.
+
+  Where no control map is available, nothing is excluded: an absent map means
+  nothing can be concluded, not that nothing is attested.
+
+- **The control maps of several groups are no longer collapsed to the last
+  one.** `run_analyses` recorded the map for tabulation with
+  `ran[key] = control_map` inside the per-group loop, so where a method ran on
+  more than one control group only the final group's map survived to be
+  tabulated. Nothing read the map, so nothing noticed. It is now accumulated
+  across groups, which it had to be before `tabulate_chronos` could restrict
+  anything to it -- otherwise every earlier group's comparisons would have been
+  dropped as undeclared. No screen here runs Chronos on more than one group, so
+  this corrects a hazard rather than an observed fault.
+
+## 3.1.8
+
+### Fixed
+
+- **Chronos tables carried a comparison of each control against itself.** One
+  screen here produced 15 comparisons, of which 3 were
+  `<control>-<control>`, one per control group. MAGeCK and DrugZ were
+  unaffected and show no such column.
+
+  Chronos identifies a trajectory by its Trajectory value rather than by sample
+  name, so `tabulate_chronos` maps those values back to samples through the
+  workbook. A trajectory is one arm followed over time, so its Trajectory value
+  is shared by every sample on it -- the t0 included. Mapping back therefore
+  returned the control as well as the later timepoints, and the control got a
+  column of its own.
+
+  Nothing in it was a comparison of the control with itself. `call_chronos_batch`
+  sets the control's `cell_line_name` to `pDNA`, so Chronos never models it as
+  an endpoint. What the column actually held was a duplicate of another
+  comparison in the same table: on the screen here, each `<control>-<control>`
+  column was identical to that control's untreated arm, carried over by the
+  merge and relabelled. So this was not a harmless extra column but a second
+  copy of a real result under a name nothing else would match, which a database
+  built from these tables would have counted twice.
+
+  Those columns are now dropped, and the remaining comparisons are unchanged:
+  on the screen here the other 12 columns are identical before and after.
+  MAGeCK and DrugZ take their comparisons from result filenames, which name
+  both sides, which is why only Chronos could do this.
+
+- **A gzipped Chronos model was invisible to the tabulator.** `tabulate_chronos`
+  tested for `gene_effect.hdf5` with a bare `os.path.exists` and skipped the
+  level when only `gene_effect.hdf5.gz` was there -- before `read_chronos`, which
+  expands a gzipped model itself, was ever reached.
+
+  A finished result is routinely gzipped afterwards, and the two halves of the
+  pipeline then disagreed about whether it existed: `call_chronos_batch` looks
+  through `maybe_its_gz`, so it reported the result as already present and
+  skipped recomputing it, and the tabulation step that followed reported that no
+  comparison had produced anything and wrote an empty table. Gunzipping the
+  models by hand made the same run tabulate normally, which is the tell. The
+  check now goes through `maybe_its_gz` as well.
+
+  MAGeCK and DrugZ were unaffected because they are read with pandas, which
+  decompresses by extension.
+
+## 3.1.7
+
+### Fixed
+
+- **`exorcise-database` was killed outright when a collection contained a very
+  large screen.** `insert_records` built one ORM object per row and handed the
+  whole list to `session.add_all`. With `tabulate_statistics` returning a
+  DataFrame, `to_dict(orient="records")` turning all of it into dicts, and then
+  one ORM object per dict, an experiment existed three times over in memory
+  before a single row reached SQLite.
+
+  That is affordable for most screens and not for all of them. One screen here
+  has 21,107,459 statistics rows -- about 420 comparisons across 27,000 genes,
+  for two methods -- and processing it alone took the container from 14.5 GiB to
+  the 22.94 GiB it was allowed, at which point the Linux OOM killer sent
+  SIGKILL. A killed process does not raise, log, roll back or clean up, which is
+  why this looked like the command quietly stopping: no traceback, nothing from
+  Docker, and a part-written `database.db` left behind beside its rollback
+  journal. `docker inspect` is where it shows up, as `OOMKilled=true` and exit
+  code 137.
+
+  Rows now go in through a SQLAlchemy Core bulk insert, in chunks of
+  `INSERT_CHUNK_SIZE`, and `iter_frame_records` materialises the dicts a chunk
+  at a time instead of all at once. No ORM object is built at any point. On the
+  same 21-million-row screen, resident memory is flat at about 2.5 GiB for the
+  whole insert rather than climbing until the process dies, and peak memory no
+  longer depends on how large the biggest experiment is.
+
+  Batching the workbooks across several invocations would not have helped, since
+  the peak came from one experiment rather than from their accumulation; a batch
+  containing that screen would have failed on its own.
+
+  The single commit in `write_db_files` is deliberately unchanged, so a build is
+  still all or nothing.
+
+- **NaN values are now written as NULL rather than having their key dropped.** A
+  bulk insert compiles one statement per chunk and binds every row to it, so the
+  rows in a chunk have to agree on their columns; dropping a key per row gave a
+  different set for each. Dropping it was there to let column defaults apply, and
+  no column in the schema declares a default, so a missing key and an explicit
+  None both reach the database as NULL. No stored value changes.
+
+## 3.1.6
+
+### Removed
+
+- **The bundled exome is no longer copied into the Docker image.** `data/` was
+  copied to `/exorcise/data/`, but no documented run ever read it: every example
+  passes `--exome` as a path under the bind mount at `/data`, so the exome that
+  got used was always the one in the user's own working directory. The copy in
+  the image was a duplicate that nothing referenced and that could only drift
+  from the repository.
+
+  `data/` stays in the repository, and is still where the examples point. Users
+  who work only from the image and have no exome of their own now download one;
+  the Docker Hub README gives the URL alongside the genome.
+
+  No code path is affected. Nothing in `R/`, `bin/`, `py/` or the entrypoint ever
+  defaulted to `/exorcise/data`, and `--exome` has always been required.
+
+### Fixed
+
+- **Chronos was being given guides that target olfactory receptor genes as
+  negative controls.** Both control patterns carried `.*_OR\d.*`, inherited
+  from crispr_tools, for libraries that name their cutting controls after
+  olfactory receptors. Exorcise writes the gene symbol into `exo_id`, so against
+  an exorcised library that pattern matched every guide targeting a real
+  olfactory receptor gene, of which the human genome has about 400.
+
+  Negative controls are guides Chronos is told produce no phenotype. It
+  normalises the readcounts so their medians line up against the pDNA samples
+  and estimates excess variance from them, so a set full of targeting guides
+  does not merely waste the estimate, it distorts the fit. In the screens to
+  hand it matched 6247 guides in one, 2637 in another, 2615 in a third -- all of
+  them OR4F3, OR51B5, OR2I1P and the like -- and in every case the pattern fired
+  only as a false positive. Where a library also declared genuine non-targeting
+  controls, those were diluted with the OR guides rather than used on their own.
+
+  `.*_Cutting\d.*` stays. It matches declared controls, labelled `Cutting1_1`
+  and so on in the gene column, and no gene symbol collides with it.
+
+- **A negative control set Chronos rejected meant the fit continued with no
+  controls at all.** The candidate sets are now tried in turn -- non-targeting
+  controls declared by the library, then declared cutting controls, then
+  Exorcise's own unmapped-guide labels -- and the first Chronos accepts is used.
+  They are kept apart rather than merged because they are different claims about
+  a guide and Chronos does not take them interchangeably. One screen here
+  demonstrates it: Chronos rejects its 3790 declared non-targeting controls as
+  something it cannot normalise with, and then fits perfectly well on the 5443
+  guides Exorcise marked as unmapped. Under the old code that first rejection
+  ended the matter and the screen produced nothing.
+
+- **Control sets too small to fit with were used anyway.** Chronos raises
+  "Fewer than 20 negative control sgRNAs remaining" rather than fit with fewer
+  than 20, so a smaller set is worse than none: it costs the fit that would
+  otherwise have run on Chronos's default excess variance. One screen here
+  offered 5, took them, and lost Chronos entirely. Sets below
+  `CHRONOS_MIN_NEGATIVE_CONTROLS` are now passed over, and the shortfall is
+  reported.
+
+- **Two of the three attempts to fit without negative controls could never have
+  succeeded.** Excess variance has to be supplied explicitly on that path --
+  Chronos estimates it from negative controls, and there are none -- so the two
+  attempts that omitted it always failed with `excess_variance was passed as
+  dict without key for 'default'`. They only added that message to every failure
+  report. What remains is the attempt that supplies the value, and a retry
+  without `initial_screen_delay` for a Chronos too old to accept it.
+
+- **A failure to fit is now attributed to the right thing.** The advice printed
+  after an unsuccessful fit always pointed at the negative controls. When
+  Chronos raises "estimated efficacy outside bounds" it has rejected the
+  screen's own fold changes -- in at least one replicate the guides that deplete
+  most across the group do not deplete at all -- and relabelling controls cannot
+  change that. The two cases now say different things.
+
+- **Sparse negative controls are reported before Chronos chokes on them.** How
+  well the control guides were actually sequenced is now checked against the
+  counts file, before any pseudocount is added, and a set mostly missing from
+  the samples is called out. This has to happen before the pseudocount: adding
+  one turns an undetected guide into a guide reading exactly the pseudocount,
+  indistinguishable from a real low count by the time Chronos sees it. One
+  screen here offers 80 non-targeting controls of which 1 is detected in every
+  sample; another offers 7049 of which none are. Chronos rejects both, with a
+  paragraph about normalisation that never mentions the counts.
+
+- **An empty results table is no longer silent.** When every comparison fails,
+  the tabulation step still writes the table, and a method that produced nothing
+  left behind a file that looked like a result: the database build reads an
+  empty table as "this method contributed nothing" rather than as an error, and
+  the pipeline exits 0. It now warns once, naming the file, at the point it is
+  known.
+
+- **The image's permission check no longer names a file the image does not
+  have.** That check exists to fail the build rather than ship an image that
+  only root can read, and it listed the bundled exome. With the exome no longer
+  copied, `stat` on it failed, and because the check runs under `set -e` inside
+  a bare assignment, the build aborted on a `stat: cannot statx` that said
+  nothing about the real cause. The exome is off the list; the rest of it, which
+  is what guards Singularity and `docker run --user`, is unchanged.
+
+### Documentation
+
+- A Docker Hub README, `docker/README.dockerhub.md`, trimmed to that audience
+  and to Docker Hub's 25,000 byte limit. It drops the conda, source install,
+  repository layout and versioning sections, says what the image does and does
+  not contain, notes that `example/` is not copied, and gives the `curl` lines
+  for the genome and the exome. `README.md` remains the full documentation.
+
 ## 3.1.5
 
 ### Fixed
