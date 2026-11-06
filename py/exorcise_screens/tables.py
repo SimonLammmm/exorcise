@@ -179,7 +179,14 @@ def tabulate_chronos(prefix, cell_line_hash, ctrl_map=None,
         level = re.sub(stem + r"(.+)", r"\1", fn)
 
         gene_effect_path = os.path.join(parent, fn, "gene_effect.hdf5")
-        if not os.path.exists(gene_effect_path):
+        # Through maybe_its_gz, because a finished result is routinely gzipped
+        # afterwards and read_chronos expands one itself. Until 3.1.8 this
+        # looked only for the plain name, so a gzipped model was skipped here
+        # before read_chronos ever saw it: call_chronos_batch reported the
+        # result as already present and skipped recomputing it, and the
+        # tabulator then reported that no comparison had produced anything.
+        # Gunzipping by hand made the same run work, which is the tell.
+        if not os.path.exists(maybe_its_gz(gene_effect_path)):
             # Skip levels where Chronos failed to produce gene_effect.hdf5
             continue
 
@@ -192,6 +199,20 @@ def tabulate_chronos(prefix, cell_line_hash, ctrl_map=None,
         tab = tab.reset_index()
         tab["index"] = tab["index"].astype(str)
         tab = tab.merge(hash_table, how="left").drop("index", axis=1)
+
+        # A trajectory is one arm followed over time, so its Trajectory value is
+        # shared by every sample on it -- including the control the model was
+        # built against, which is that trajectory's own first timepoint. Mapping
+        # Chronos's per-trajectory rows back through that gives the control a
+        # column of its own, read as a comparison of the control against itself.
+        # It is not one: call_chronos_batch marks the control as pDNA, so
+        # Chronos never models it as an endpoint, and the column carried
+        # whichever trajectory happened to merge onto it. MAGeCK and DrugZ are
+        # unaffected because they take their comparisons from result filenames,
+        # which name both sides.
+        self_comparison = tab["sample"] == level
+        if self_comparison.any():
+            tab = tab.loc[~self_comparison]
         tab = tab.set_index("sample")
         tab = tab.set_axis([level + compjoiner + str(c) for c in tab.index])
         tab = tab.transpose()

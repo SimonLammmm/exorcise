@@ -1,5 +1,51 @@
 # Changelog
 
+## 3.1.8
+
+### Fixed
+
+- **Chronos tables carried a comparison of each control against itself.** One
+  screen here produced 15 comparisons, of which 3 were
+  `<control>-<control>`, one per control group. MAGeCK and DrugZ were
+  unaffected and show no such column.
+
+  Chronos identifies a trajectory by its Trajectory value rather than by sample
+  name, so `tabulate_chronos` maps those values back to samples through the
+  workbook. A trajectory is one arm followed over time, so its Trajectory value
+  is shared by every sample on it -- the t0 included. Mapping back therefore
+  returned the control as well as the later timepoints, and the control got a
+  column of its own.
+
+  Nothing in it was a comparison of the control with itself. `call_chronos_batch`
+  sets the control's `cell_line_name` to `pDNA`, so Chronos never models it as
+  an endpoint. What the column actually held was a duplicate of another
+  comparison in the same table: on the screen here, each `<control>-<control>`
+  column was identical to that control's untreated arm, carried over by the
+  merge and relabelled. So this was not a harmless extra column but a second
+  copy of a real result under a name nothing else would match, which a database
+  built from these tables would have counted twice.
+
+  Those columns are now dropped, and the remaining comparisons are unchanged:
+  on the screen here the other 12 columns are identical before and after.
+  MAGeCK and DrugZ take their comparisons from result filenames, which name
+  both sides, which is why only Chronos could do this.
+
+- **A gzipped Chronos model was invisible to the tabulator.** `tabulate_chronos`
+  tested for `gene_effect.hdf5` with a bare `os.path.exists` and skipped the
+  level when only `gene_effect.hdf5.gz` was there -- before `read_chronos`, which
+  expands a gzipped model itself, was ever reached.
+
+  A finished result is routinely gzipped afterwards, and the two halves of the
+  pipeline then disagreed about whether it existed: `call_chronos_batch` looks
+  through `maybe_its_gz`, so it reported the result as already present and
+  skipped recomputing it, and the tabulation step that followed reported that no
+  comparison had produced anything and wrote an empty table. Gunzipping the
+  models by hand made the same run tabulate normally, which is the tell. The
+  check now goes through `maybe_its_gz` as well.
+
+  MAGeCK and DrugZ were unaffected because they are read with pandas, which
+  decompresses by extension.
+
 ## 3.1.7
 
 ### Fixed
